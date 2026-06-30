@@ -33,6 +33,7 @@ jobs:
         shell: pwsh
         run: |
           $vipsVer = "8.18.2"
+          $dirVer = "8.18"
           $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
           $installDir = "C:\vips"
@@ -40,7 +41,7 @@ jobs:
           curl -L -o $zipFile $zipUrl
           Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
 
-          $prefix = Join-Path $installDir "vips-dev-x64-all-$vipsVer"
+          $prefix = Join-Path $installDir "vips-dev-$dirVer"
           $binPath = Join-Path $prefix "bin"
           echo $binPath | Out-File -FilePath $env:GITHUB_PATH -Append
 
