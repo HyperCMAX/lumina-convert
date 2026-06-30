@@ -1,87 +1,50 @@
 name: Build Windows EXE
+
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'npm'
+      - name: Install pnpm
+        shell: pwsh
+        run: npm install -g pnpm
 
-      - name: Install JS dependencies via npm
-        run: npm install
+      - name: Install JS deps
+        run: pnpm install
 
-      - name: Build frontend
-        run: npm run build
-
-      # 安装 Rust 并指定 GNU 编译目标，解决绑定结构体溢出
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
-
-      - name: Cache Rust build artifacts
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      # 修复：无 BOM 编码写入 PATH，确保跨步骤生效
-      - name: Install libvips official prebuilt binary
+      - name: Install libvips via vcpkg
         shell: pwsh
         run: |
-          $vipsVer = "8.18.2"
-          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
-          $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
-          $installRoot = "C:\vips"
+          vcpkg install libvips --triplet x64-windows
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          # 下载解压
-          curl -L -o "$zipFile" "$zipUrl"
-          Expand-Archive -Path $zipFile -DestinationPath $installRoot -Force
-
-          # 递归查找 vips.exe 位置
-          $vipsExe = Get-ChildItem -Path $installRoot -Filter vips.exe -Recurse | Select-Object -First 1
-          if (-not $vipsExe) {
-            Write-Error "vips.exe not found in extracted files"
-            exit 1
-          }
-          $binPath = $vipsExe.DirectoryName
-          Write-Host "Found vips.exe at: $binPath"
-
-          # 无 BOM UTF-8 写入 GITHUB_PATH，修复编码导致的 PATH 失效
-          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-          [System.IO.File]::AppendAllText($env:GITHUB_PATH, "$binPath`n", $utf8NoBom)
-
-          # 同步写入 pkgconfig 环境变量
-          $pkgConfig = Get-ChildItem -Path $installRoot -Filter pkgconfig -Recurse -Directory | Select-Object -First 1
-          if ($pkgConfig) {
-            $pkgLine = "PKG_CONFIG_PATH=$($pkgConfig.FullName)"
-            [System.IO.File]::AppendAllText($env:GITHUB_ENV, "$pkgLine`n", $utf8NoBom)
+      - name: Verify vips headers
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          $inc = "$vcpkg\installed\x64-windows\include"
+          Write-Host "Include dir: $inc"
+          if (Test-Path "$inc\vips\vips.h") {
+            Write-Host "vips/vips.h found!" -ForegroundColor Green
+          } else {
+            Write-Host "vips/vips.h NOT found at $inc" -ForegroundColor Red
+            Get-ChildItem $inc -Recurse -Filter "vips.h" | Select-Object -First 5
           }
 
-          # 同步骤内先验证一次，确认路径有效
-          & $vipsExe.FullName --version
+      - name: Build Tauri App
+        run: pnpm tauri build
 
-      - name: Verify vips installation
-        run: vips --version
-
-      # GNU 目标构建，匹配 libvips 绑定 ABI
-      - name: Build Tauri Windows App
-        run: npx tauri build --target x86_64-pc-windows-gnu
-
-      - name: Upload build artifacts
+      - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: windows-tauri-exe-package
-          path: |
-            target/x86_64-pc-windows-gnu/release/*.exe
-            target/x86_64-pc-windows-gnu/release/*.msi
-            target/x86_64-pc-windows-gnu/release/*.zip
+          name: LuminaConvert-Windows
+          path: src-tauri/target/release/LuminaConvert.exe
+          if-no-files-found: error
