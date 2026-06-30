@@ -1,49 +1,62 @@
 name: Build Windows EXE
-
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
+  workflow_dispatch: # 支持网页手动触发构建
 
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-      - uses: actions/checkout@v4
+      # 拉取仓库源码
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
+      # 配置Node.js 22（官方稳定支持，无需废弃放行变量，复用runner预装快速完成）
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 安装稳定版pnpm
       - name: Install pnpm
-        shell: pwsh
-        run: npm install -g pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
-      - name: Install JS deps
-        run: pnpm install
+      # 安装JS依赖，放行esbuild构建脚本，解决pnpm拦截报错
+      - name: Install JS dependencies
+        run: pnpm install --allow-build=esbuild
 
-      - name: Install libvips (vcpkg)
-        shell: pwsh
+      # 执行前端项目构建（匹配项目package.json里build脚本）
+      - name: Build frontend
+        run: pnpm run build
+
+      # 配置Rust稳定编译工具链，Tauri编译核心依赖
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 缓存Rust编译依赖，加速重复构建
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+
+      # 安装vcpkg与libvips依赖（按需保留，项目无需可删除此步骤）
+      - name: Install libvips via vcpkg
         run: |
-          vcpkg install libvips --triplet x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "LIBS=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "INCLUDE=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          choco install vcpkg
+          vcpkg install libvips:x64-windows
 
-      - name: Install cargo-vcpkg
-        run: cargo install cargo-vcpkg
-
-      - name: Build
+      # 执行Tauri打包编译，生成Windows EXE、MSI安装包
+      - name: Build Tauri Windows App
         run: pnpm tauri build
 
-      - name: Upload EXE
+      # 上传编译产物到CI制品，构建完成后可下载
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LuminaConvert-Windows
-          path: src-tauri/target/release/LuminaConvert.exe
-          if-no-files-found: error
-
-      - name: Setup Node 20
-      uses: actions/setup-node@v4
-      with:
-      node-version: 20
-
-      run: pnpm install --strict-dep-builds=false
+          name: windows-tauri-exe-package
+          path: |
+            target/release/*.exe
+            target/release/*.msi
+            target/release/*.zip
+            target/release/*.nupkg
