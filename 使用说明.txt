@@ -1,0 +1,24 @@
+构建方法
+========
+
+方法1: 双击 setup.bat
+方法2: 右键 setup.ps1 -> 使用 PowerShell 运行
+方法3: 手动执行（推荐新手先看）
+
+手动步骤:
+1. 安装 Rust: https://rustup.rs
+2. 安装 Node.js: https://nodejs.org
+3. 打开 cmd，cd 到这个文件夹
+4. 执行:
+     npm install -g pnpm
+     pnpm install
+     pnpm tauri build
+5. EXE 在 src-tauri\target\release\LuminaConvert.exe
+
+国内用户如果下载慢:
+  npm: npm config set registry https://registry.npmmirror.com
+  cargo: 创建文件 %USERPROFILE%\.cargo\config.toml，内容:
+    [source.crates-io]
+    replace-with = 'ustc'
+    [source.ustc]
+    registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"

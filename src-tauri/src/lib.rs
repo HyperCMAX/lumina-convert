@@ -1,0 +1,310 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::{Path, PathBuf};
+use std::panic;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
+use once_cell::sync::Lazy;
+use thread_priority::{ThreadPriority, set_current_thread_priority};
+use std::convert::TryInto;
+use serde::Deserialize;
+use serde_json::json;
+use tauri::{Emitter, AppHandle};
+use walkdir::WalkDir;
+
+use libvips::{VipsApp, VipsImage, ops};
+
+static RAYON_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
+    ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .start_handler(|_id| {
+            let _ = set_current_thread_priority(ThreadPriority::Crossplatform(
+                10.try_into().unwrap()
+            ));
+        })
+        .build()
+        .expect("致命错误: 无法初始化 Rayon 低优先级线程池")
+});
+
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+static COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RENAME_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+#[derive(Deserialize, Clone)]
+pub struct ConvertOptions {
+    pub format: String,
+    pub preset: String,
+    pub metadata: String,
+    pub output_dir: String,
+    pub resize_mode: String,
+    pub resize_value: u32,
+    pub bit_depth: String,
+    pub rename_template: String,
+}
+
+fn get_safe_output_path(dir: &Path, stem: &str, original_ext: &str, preset: &str, ext: &str) -> PathBuf {
+    let base_name = format!("{}_{}_{}", stem, original_ext, preset);
+    let mut candidate = dir.join(format!("{}.{}", base_name, ext));
+    let mut counter = 1;
+    while candidate.exists() {
+        candidate = dir.join(format!("{} ({}).{}", base_name, counter, ext));
+        counter += 1;
+        if counter > 9999 { break; }
+    }
+    candidate
+}
+
+fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) -> Result<String, String> {
+    if path.contains("error") {
+        panic!("模拟底层崩溃！");
+    }
+
+    let path_obj = Path::new(path);
+    let file_stem = path_obj.file_stem().unwrap_or_default().to_string_lossy();
+    let original_ext = path_obj.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+
+    let ext = match options.format.as_str() {
+        "jpeg" => "jpg",
+        "heic" => "webp",
+        _ => options.format.as_str()
+    };
+
+    let img = VipsImage::new_from_file(path)
+        .map_err(|e| format!("硬件解码失败: {:?}", e))?;
+
+    let mut proc = ops::autorot(&img)
+        .map_err(|e| format!("自动旋转失败: {:?}", e))?;
+
+    // 🚨 引擎 1: 智能尺寸 (Lanczos3 重采样)
+    if options.resize_mode != "none" && options.resize_value > 0 {
+        let (w, h) = (proc.get_width() as f64, proc.get_height() as f64);
+        let scale = match options.resize_mode.as_str() {
+            "fit" => {
+                let max_side = w.max(h);
+                if (options.resize_value as f64) < max_side {
+                    Some(options.resize_value as f64 / max_side)
+                } else { None }
+            },
+            "percent" if options.resize_value != 100 => {
+                Some(options.resize_value as f64 / 100.0)
+            },
+            _ => None,
+        };
+        if let Some(s) = scale {
+            let opts = ops::ResizeOptions {
+                kernel: ops::Kernel::Lanczos3,
+                ..Default::default()
+            };
+            proc = match ops::resize_with_opts(&proc, s, &opts) {
+                Ok(img) => img,
+                Err(_) => proc,
+            };
+        }
+    }
+
+    // 🚨 引擎 2: 16-bit / HDR 色彩映射
+    if let "jpeg" | "webp" | "avif" = options.format.as_str() {
+        proc = match ops::colourspace(&proc, ops::Interpretation::Srgb) {
+            Ok(img) => img,
+            Err(_) => proc,
+        };
+    }
+    if options.bit_depth == "16bit" {
+        if let "png" | "tiff" = options.format.as_str() {
+            proc = match ops::cast(&proc, ops::BandFormat::Ushort) {
+                Ok(img) => img,
+                Err(_) => proc,
+            };
+        }
+    } else if options.bit_depth == "8bit" {
+        proc = match ops::cast(&proc, ops::BandFormat::Uchar) {
+            Ok(img) => img,
+            Err(_) => proc,
+        };
+    }
+
+    // 🚨 引擎 3: 模板化批量重命名
+    let final_stem = options.rename_template
+        .replace("{original}", &file_stem)
+        .replace("{width}", &proc.get_width().to_string())
+        .replace("{height}", &proc.get_height().to_string())
+        .replace("{ext}", &original_ext)
+        .replace("{counter}", &format!("{:04}", counter));
+
+    let out_path = get_safe_output_path(
+        Path::new(&options.output_dir),
+        &final_stem,
+        &original_ext,
+        &options.preset,
+        ext
+    );
+
+    let meta_param = match options.metadata.as_str() {
+        "strip" => "strip",
+        "icc" => "keep=icc-profile",
+        _ => ""
+    };
+
+    let save_options = match options.format.as_str() {
+        "jpeg" => {
+            let q = match options.preset.as_str() { "fast" => 60, "standard" => 80, "high" => 95, "lossless" => 100, _ => 80 };
+            format!(".jpg[Q={},optimize_coding,{}]", q, meta_param)
+        },
+        "png" => {
+            let compression = match options.preset.as_str() { "fast" => 1, "standard" => 6, "high" => 9, "lossless" => 9, _ => 6 };
+            format!(".png[compression={},{}]", compression, meta_param)
+        },
+        "webp" | "heic" => {
+            if options.preset == "lossless" {
+                format!(".webp[lossless,{}]", meta_param)
+            } else {
+                let q = match options.preset.as_str() { "fast" => 60, "standard" => 80, "high" => 95, _ => 80 };
+                format!(".webp[Q={},{}]", q, meta_param)
+            }
+        },
+        "avif" => {
+            let q = match options.preset.as_str() { "fast" => 50, "standard" => 70, "high" => 90, "lossless" => 100, _ => 70 };
+            if options.preset == "lossless" {
+                format!(".avif[lossless,{}]", meta_param)
+            } else {
+                format!(".avif[Q={},{}]", q, meta_param)
+            }
+        },
+        "jxl" => {
+            let q = match options.preset.as_str() { "fast" => 70, "standard" => 85, "high" => 95, "lossless" => 100, _ => 85 };
+            if options.preset == "lossless" {
+                format!(".jxl[lossless,{}]", meta_param)
+            } else {
+                format!(".jxl[Q={},{}]", q, meta_param)
+            }
+        },
+        "tiff" => {
+            let compression = if options.preset == "fast" { "none" } else { "lzw" };
+            format!(".tiff[compression={},{}]", compression, meta_param)
+        },
+        "bmp" => format!(".bmp[{}]", meta_param),
+        "gif" => format!(".gif[{}]", meta_param),
+        _ => return Err("不支持的格式".to_string())
+    };
+
+    let base_path = out_path.with_extension("");
+    let final_path_str = format!("{}{}", base_path.to_string_lossy(), save_options);
+
+    proc.image_write_to_file(&final_path_str)
+        .map_err(|e| format!("编码失败: {:?}", e))?;
+
+    Ok(format!("成功: {} -> {}", path_obj.file_name().unwrap().to_string_lossy(), out_path.file_name().unwrap().to_string_lossy()))
+}
+
+#[tauri::command]
+fn scan_folder(path: String) -> Result<Vec<String>, String> {
+    let mut images = Vec::new();
+    let valid_exts = ["jpg", "jpeg", "png", "heic", "heif", "hif", "webp", "avif", "jxl", "tiff", "tif", "bmp", "gif", "svg", "pdf"];
+
+    for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+        if images.len() >= 5000 { break; }
+
+        if entry.file_type().is_file() {
+            if let Some(ext) = entry.path().extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
+                if valid_exts.contains(&ext_str.as_str()) {
+                    images.push(entry.path().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    Ok(images)
+}
+
+#[tauri::command]
+fn cancel_conversion() {
+    CANCEL_FLAG.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn open_output_dir(path: String) -> Result<(), String> {
+    open::that(path).map_err(|e| format!("打开目录失败: {}", e))
+}
+
+#[tauri::command]
+async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHandle) -> Result<String, String> {
+    CANCEL_FLAG.store(false, Ordering::Relaxed);
+    COMPLETED_COUNT.store(0, Ordering::Relaxed);
+    RENAME_COUNTER.store(1, Ordering::Relaxed);
+
+    let out_dir_path = Path::new(&options.output_dir);
+    if !out_dir_path.exists() || !out_dir_path.is_dir() {
+        return Err("致命错误: 导出目录不存在或不是有效文件夹".to_string());
+    }
+
+    let total_files = paths.len();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let results: Vec<Result<String, String>> = RAYON_POOL.install(|| {
+            paths
+                .into_par_iter()
+                .map(|path| {
+                    if CANCEL_FLAG.load(Ordering::Relaxed) {
+                        return Err("用户取消".to_string());
+                    }
+
+                    let current_counter = RENAME_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+                    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        convert_single_image(&path, &options, current_counter)
+                    }));
+
+                    let current = COMPLETED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    let filename = Path::new(&path).file_name()
+                        .unwrap_or_default().to_string_lossy().to_string();
+                    let is_success = result.is_ok() && result.as_ref().unwrap().is_ok();
+
+                    let _ = app.emit("convert-progress", json!({
+                        "current": current,
+                        "total": total_files,
+                        "filename": filename,
+                        "status": if is_success { "success" } else { "failed" }
+                    }));
+
+                    match result {
+                        Ok(Ok(msg)) => Ok(msg),
+                        Ok(Err(e)) => Err(format!("处理失败 {}: {}", path, e)),
+                        Err(_) => Err(format!("严重错误: 文件 {} 导致底层崩溃", path)),
+                    }
+                })
+                .collect()
+        });
+
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+        let fail_count = results.len() - success_count;
+        let canceled = CANCEL_FLAG.load(Ordering::Relaxed);
+
+        if canceled {
+            format!("任务已安全终止！成功: {} 张，跳过: {} 张", success_count, total_files - success_count)
+        } else {
+            format!("批量处理完成！成功: {} 张，失败/隔离: {} 张", success_count, fail_count)
+        }
+    }).await.map_err(|e| format!("任务调度崩溃: {}", e))?;
+
+    Ok(result)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let _vips = VipsApp::new("LuminaConvert", false)
+        .expect("致命错误: 无法初始化 libvips 引擎，请检查系统是否安装了 vips");
+    _vips.concurrency_set(num_cpus::get() as i32);
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            process_images,
+            scan_folder,
+            cancel_conversion,
+            open_output_dir,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
