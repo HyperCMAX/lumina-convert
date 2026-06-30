@@ -65,11 +65,17 @@ jobs:
       - name: Build Tauri Windows App
         run: npx tauri build
 
+      - name: Copy vips directory alongside EXE for portable standalone use
+        shell: pwsh
+        run: |
+          Write-Host "Copying vips directory structure alongside EXE for portable mode..."
+          Copy-Item -Path "src-tauri/resources/vips" -Destination "src-tauri/target/release/vips" -Recurse -Force -Verbose
+          Write-Host "vips deployed alongside EXE at src-tauri/target/release/vips/"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-tauri-exe-package
           path: |
             src-tauri/target/release/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/vips/**/*
