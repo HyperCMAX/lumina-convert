@@ -1,13 +1,40 @@
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        if let Ok(lib_dir) = std::env::var("VIPS_LIB_DIR") {
-            println!("cargo:rustc-link-search=native={}", lib_dir);
+    if let Ok(lib_dir) = std::env::var("VIPS_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+    } else {
+        for dir in discover_lib_dirs() {
+            println!("cargo:rustc-link-search=native={}", dir);
         }
-        generate_bindings();
     }
-    println!("cargo:rustc-link-lib=libvips");
-    println!("cargo:rustc-link-lib=libglib-2.0");
-    println!("cargo:rustc-link-lib=libgobject-2.0");
+
+    generate_bindings();
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=libvips");
+        println!("cargo:rustc-link-lib=libglib-2.0");
+        println!("cargo:rustc-link-lib=libgobject-2.0");
+    } else {
+        println!("cargo:rustc-link-lib=vips");
+        println!("cargo:rustc-link-lib=glib-2.0");
+        println!("cargo:rustc-link-lib=gobject-2.0");
+    }
+}
+
+fn discover_lib_dirs() -> Vec<String> {
+    let mut dirs = Vec::new();
+
+    for lib_dir in &[
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+    ] {
+        let vips_lib = format!("{}/libvips.dylib", lib_dir);
+        if std::path::Path::new(&vips_lib).exists() {
+            dirs.push(lib_dir.to_string());
+            return dirs;
+        }
+    }
+
+    dirs
 }
 
 fn generate_bindings() {
@@ -37,6 +64,20 @@ fn discover_include_dirs() -> Vec<String> {
             dirs.push(prefix.clone());
             dirs.push(format!("{}/glib-2.0", prefix));
             dirs.push(format!("{}/../lib/glib-2.0/include", prefix));
+            return dirs;
+        }
+    }
+
+    // macOS Homebrew paths
+    for base in &["/opt/homebrew/include", "/usr/local/include"] {
+        let vips_h = format!("{}/vips/vips.h", base);
+        if std::path::Path::new(&vips_h).exists() {
+            dirs.push(base.to_string());
+            dirs.push(format!("{}/glib-2.0", base));
+            let glib_config = format!("{}/../lib/glib-2.0/include", base);
+            if std::path::Path::new(&glib_config).exists() {
+                dirs.push(glib_config);
+            }
             return dirs;
         }
     }
