@@ -78,10 +78,19 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
 
     // 🚨 双保险解码：先试文件读取（格式检测最准），失败再回退内存解码（免疫中文路径）
     let img = VipsImage::new_from_file(path)
-        .or_else(|_| {
+        .or_else(|e1| {
             let data = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
             VipsImage::new_from_buffer(&data, "")
-                .map_err(|e| format!("硬件解码失败(可能为损坏文件): {:?}", e))
+                .map_err(|e2| {
+                    let err_str = format!("{:?}", e2).to_lowercase();
+                    if (original_ext == "hif" || original_ext == "heic" || original_ext == "heif")
+                        && (err_str.contains("no loader") || err_str.contains("heif"))
+                    {
+                        "⚠️ Windows 环境缺失 HEVC 解码组件 (H.265 专利壁垒)。请确保打包时已注入 libheif.dll，或在微软商店安装 'HEVC 视频扩展'。".to_string()
+                    } else {
+                        format!("硬件解码失败(可能为损坏文件): {:?}", e2)
+                    }
+                })
         })?;
 
     let mut proc = ops::autorot(&img)
@@ -348,6 +357,19 @@ pub fn run() {
     _vips.concurrency_set(num_cpus::get() as i32);
 
     tauri::Builder::default()
+        .setup(|app| {
+            // 🚨 核心魔法：动态注入 resources 目录路径，让 libvips 能找到 HEIC 解码 DLL
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let dir_str = resource_dir.to_string_lossy().to_string();
+                std::env::set_var("VIPS_MODULE_PATH", &dir_str);
+                let current_path = std::env::var("PATH").unwrap_or_default();
+                #[cfg(target_os = "windows")]
+                std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
+                #[cfg(not(target_os = "windows"))]
+                std::env::set_var("PATH", format!("{}:{}", dir_str, current_path));
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
