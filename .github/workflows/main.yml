@@ -69,6 +69,7 @@ jobs:
           name: windows-tauri-exe-package
           path: |
             src-tauri/target/release/*.exe
+            src-tauri/target/release/*.dll
             src-tauri/target/release/*.msi
             src-tauri/target/release/*.zip
             src-tauri/target/release/*.nupkg
