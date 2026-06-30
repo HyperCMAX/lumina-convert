@@ -62,15 +62,6 @@ jobs:
           Write-Host "vips directory bundled at src-tauri/resources/vips/"
           Get-ChildItem "src-tauri/resources/vips/lib" -Recurse -Filter "*.dll" | ForEach-Object { Write-Host "  module: $($_.FullName)" }
 
-      - name: Setup libvips Linking Environment
-        shell: pwsh
-        run: |
-          $vips_root = "${{ github.workspace }}\src-tauri\resources\vips"
-          echo "LIBVIPS_LIB_DIR=$vips_root\lib" >> $env:GITHUB_ENV
-          echo "LIBVIPS_INCLUDE_DIR=$vips_root\include" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$vips_root\lib\pkgconfig" >> $env:GITHUB_ENV
-          Write-Host "libvips link env configured: $vips_root"
-
       - name: Build Tauri Windows App
         run: npx tauri build
 
@@ -80,7 +71,5 @@ jobs:
           name: windows-tauri-exe-package
           path: |
             src-tauri/target/release/*.exe
-            src-tauri/target/release/*.dll
-            src-tauri/target/release/*.msi
-            src-tauri/target/release/*.zip
-            src-tauri/target/release/*.nupkg
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
