@@ -13,12 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pnpm
-        shell: pwsh
-        run: npm install -g pnpm
-
       - name: Install JS deps
-        run: pnpm install
+        run: npm install
 
       - name: Install libvips via vcpkg
         shell: pwsh
@@ -40,7 +36,7 @@ jobs:
           }
 
       - name: Build Tauri App
-        run: pnpm tauri build
+        run: npm run tauri build
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
