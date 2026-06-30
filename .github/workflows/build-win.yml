@@ -1,4 +1,4 @@
-name: Build Windows EXE (npm stable, binary libvips)
+name: Build Windows EXE
 on:
   push:
     branches: [ main ]
@@ -26,28 +26,31 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # 修复：指定Rust工程在src-tauri目录，解决找不到Cargo.toml
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
-      # 静默解压官方二进制包，无交互、无需商店协议确认
-      - name: Install libvips via official binary (ghproxy mirror)
+      # 修复：官方直连地址 + curl稳定下载，去掉代理
+      - name: Install libvips official prebuilt binary
         shell: pwsh
         run: |
           $vipsVer = "8.18.2"
-          $zipUrl = "https://ghproxy.com/https://github.com/libvips/libvips/releases/download/v$vipsVer/vips-dev-w64-all-$vipsVer.zip"
+          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
           $installDir = "C:\vips"
 
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+          curl -L -o "$zipFile" "$zipUrl"
           Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
 
-          $binPath = Join-Path $installDir "vips-dev-w64-all-$vipsVer\bin"
+          $binPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\bin"
           echo $binPath | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          $pkgConfigPath = Join-Path $installDir "vips-dev-w64-all-$vipsVer\lib\pkgconfig"
+          $pkgConfigPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\lib\pkgconfig"
           echo "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Verify vips install
+      - name: Verify vips installation
         run: vips --version
 
       - name: Build Tauri Windows App
