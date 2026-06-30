@@ -124,7 +124,7 @@ impl VipsImage {
             let options = utils::new_c_string(option_str)?;
             let res = bindings::vips_image_new_from_buffer(
                 buffer.as_ptr() as *const c_void,
-                buffer.len() as u64,
+                buffer.len(),
                 options.as_ptr(),
                 NULL,
             );
@@ -148,7 +148,7 @@ impl VipsImage {
             if let Some(format) = format.to_i32() {
                 let res = bindings::vips_image_new_from_memory(
                     buffer.as_ptr() as *const c_void,
-                    buffer.len() as u64,
+                    buffer.len(),
                     width,
                     height,
                     bands,
@@ -177,7 +177,7 @@ impl VipsImage {
             if let Some(format) = format.to_i32() {
                 let res = bindings::vips_image_new_from_memory_copy(
                     buffer.as_ptr() as *const c_void,
-                    buffer.len() as u64,
+                    buffer.len(),
                     width,
                     height,
                     bands,
@@ -472,7 +472,7 @@ impl VipsImage {
 
     pub fn image_write_to_buffer(&self, suffix: &str) -> Result<Vec<u8>> {
         unsafe {
-            let mut buffer_buf_size: u64 = 0;
+            let mut buffer_buf_size: usize = 0;
             let mut buffer_out: *mut c_void = null_mut();
             let suffix_c_str = utils::new_c_string(suffix)?;
             let res = bindings::vips_image_write_to_buffer(
@@ -492,9 +492,9 @@ impl VipsImage {
 
     pub fn image_write_to_memory(&self) -> Vec<u8> {
         unsafe {
-            let mut buffer_buf_size: u64 = 0;
+            let mut buffer_buf_size: usize = 0;
             let buffer_out = bindings::vips_image_write_to_memory(self.ctx, &mut buffer_buf_size);
-            let buf = std::slice::from_raw_parts(buffer_out as *mut u8, buffer_buf_size as usize).to_vec();
+            let buf = std::slice::from_raw_parts(buffer_out as *mut u8, buffer_buf_size).to_vec();
             bindings::g_free(buffer_out);
             buf
         }
@@ -635,7 +635,7 @@ impl VipsSource {
         unsafe {
             let res = bindings::vips_source_new_from_memory(
                 buffer.as_ptr() as *const c_void,
-                buffer.len() as u64,
+                buffer.len(),
             );
             vips_source_result(
                 res,
@@ -683,7 +683,7 @@ impl VipsSource {
         }
     }
 
-    pub fn read(&mut self, length: u64) -> Result<Vec<u8>> {
+    pub fn read(&mut self, length: usize) -> Result<Vec<u8>> {
         unsafe {
             let bytes: *mut c_void = null_mut();
             let result = bindings::vips_source_read(self.ctx, bytes, length);
@@ -738,14 +738,12 @@ impl VipsSource {
 impl<'a> VipsSource {
     pub fn map(&'a self) -> Result<&'a [u8]> {
         unsafe {
-            let length: *mut u64 = null_mut();
+            let length: *mut usize = null_mut();
             let result = bindings::vips_source_map(self.ctx, length);
             if length.is_null() {
                 Err(Error::OperationError("VipsSource:map - Error on vips map"))
             } else {
-                let size = (*length)
-                    .try_into()
-                    .map_err(|_| Error::OperationError("VipsSource:map - Can't get size of array"))?;
+                let size = *length;
                 Ok(std::slice::from_raw_parts(result as *mut u8, size))
             }
         }
@@ -800,7 +798,7 @@ impl VipsTarget {
             let res = bindings::vips_target_write(
                 self.ctx,
                 buffer.as_ptr() as *const c_void,
-                buffer.len() as u64,
+                buffer.len(),
             );
             if res == -1 {
                 Err(Error::OperationError("VipsTarget:write - Could not write to buffer"))
@@ -812,7 +810,7 @@ impl VipsTarget {
 
     pub fn finish(self) {
         unsafe {
-            bindings::vips_target_finish(self.ctx);
+            bindings::vips_target_end(self.ctx);
         }
     }
 
@@ -988,9 +986,9 @@ impl Drop for VipsTarget {
 impl Into<Vec<u8>> for VipsBlob {
     fn into(self) -> Vec<u8> {
         unsafe {
-            let mut size: u64 = 0;
+            let mut size: usize = 0;
             let bytes = bindings::vips_blob_get(self.ctx, &mut size);
-            Vec::from_raw_parts(bytes as *mut u8, size as usize, size as usize)
+            Vec::from_raw_parts(bytes as *mut u8, size, size)
         }
     }
 }
