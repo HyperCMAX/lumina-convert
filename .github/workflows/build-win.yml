@@ -21,7 +21,6 @@ jobs:
         with:
           version: 9
 
-      # 移除 --allow-build 无效参数，依靠配置文件放行esbuild
       - name: Install JS dependencies
         run: pnpm install
 
@@ -34,11 +33,15 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 不需要libvips可删除此步骤
-      - name: Install libvips via vcpkg
+      # 用 choco 直接装 libvips，不用绕 vcpkg
+      - name: Install libvips via Chocolatey
         run: |
-          choco install vcpkg
-          vcpkg install libvips:x64-windows
+          choco install libvips -y
+          # 把 vips 二进制目录加入PATH，让后续进程能找到
+          echo "C:\ProgramData\chocolatey\lib\libvips\tools\vips-dev-w64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Verify vips install
+        run: vips --version
 
       - name: Build Tauri Windows App
         run: pnpm tauri build
