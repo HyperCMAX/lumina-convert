@@ -33,31 +33,26 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 从libvips官方Release拉取预编译Windows二进制包、解压并注入PATH
-      - name: Install libvips from official release binary
+      # 正确可用v8.18.0 全量Windows包
+      - name: Install libvips from official release
         shell: pwsh
         run: |
-          # 选定版本，可替换为最新版
-          $vipsVersion = "8.18.0"
-          $zipUrl = "https://github.com/libvips/libvips/releases/download/v$vipsVersion/vips-dev-w64-all-$vipsVersion.zip"
-          $zipPath = Join-Path $env:RUNNER_TEMP vips.zip
-          $installRoot = "C:\vips"
+          $vipsVer = "8.18.0"
+          $zipUrl = "https://github.com/libvips/libvips/releases/download/v$vipsVer/vips-dev-w64-all-$vipsVer.zip"
+          $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
+          $dest = "C:\vips"
           
-          # 下载压缩包
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-          # 解压到目标目录
-          Expand-Archive -Path $zipPath -DestinationPath $installRoot -Force
-          # 拼接bin目录路径
-          $vipsBinPath = Join-Path $installRoot "vips-dev-w64-all-$vipsVersion\bin"
-          # 写入GITHUB_PATH，后续步骤可调用vips.exe、加载dll
-          echo $vipsBinPath | Out-File -FilePath $env:GITHUB_PATH -Append
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+          Expand-Archive $zipFile $dest -Force
           
-          # 可选：设置pkg-config路径，方便Rust编译时找到头文件/库
-          $env:PKG_CONFIG_PATH = Join-Path $installRoot "vips-dev-w64-all-$vipsVersion\lib\pkgconfig"
-          echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $binDir = Join-Path $dest "vips-dev-w64-all-$vipsVer\bin"
+          echo $binDir | Out-File $env:GITHUB_PATH -Append
+          
+          # 补充pkg-config路径方便Rust编译
+          $pkgPath = Join-Path $dest "vips-dev-w64-all-$vipsVer\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$pkgPath" | Out-File $env:GITHUB_ENV -Append
 
-      # 校验安装是否成功
-      - name: Verify vips installation
+      - name: Verify vips install
         run: vips --version
 
       - name: Build Tauri Windows App
