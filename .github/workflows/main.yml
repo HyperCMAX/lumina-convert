@@ -1,4 +1,4 @@
-name: Build Windows EXE (npm stable, libvips binary install)
+name: Build Windows EXE
 on:
   push:
     branches: [ main ]
@@ -29,23 +29,23 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 用ghproxy加速官方二进制包，静默部署，避开winget交互协议弹窗
-      - name: Install libvips from mirrored official binary
+      # 官方构建仓库正确地址 + curl稳定下载，无交互适配CI
+      - name: Install libvips official prebuilt binary
         shell: pwsh
         run: |
           $vipsVer = "8.18.2"
-          $zipUrl = "https://ghproxy.com/https://github.com/libvips/libvips/releases/download/v$vipsVer/vips-dev-w64-all-$vipsVer.zip"
+          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
-          $dest = "C:\vips"
+          $installDir = "C:\vips"
 
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
-          Expand-Archive -Path $zipFile -DestinationPath $dest -Force
+          curl -L -o $zipFile $zipUrl
+          Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
 
-          $binDir = Join-Path $dest "vips-dev-w64-all-$vipsVer\bin"
-          echo $binDir | Out-File -FilePath $env:GITHUB_PATH -Append
+          $binPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\bin"
+          echo $binPath | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          $pkgPath = Join-Path $dest "vips-dev-w64-all-$vipsVer\lib\pkgconfig"
-          echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $pkgConfigPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Verify vips installation
         run: vips --version
