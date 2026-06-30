@@ -1,59 +1,58 @@
-name: Build Windows EXE (npm stable version)
+name: Build Windows EXE (npm stable, libvips binary install)
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # 支持网页手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      # 拉取源码
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 配置Node 22（稳定官方版本，规避Node20废弃卡死）
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
 
-      # 使用npm安装依赖，完全绕开pnpm strict-dep-builds拦截问题
       - name: Install JS dependencies via npm
         run: npm install
 
-      # 构建前端（匹配package.json scripts.build）
       - name: Build frontend
         run: npm run build
 
-      # 初始化Rust编译工具链，Tauri核心编译环境
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存Rust编译产物，加速重复构建
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # winget官方安装libvips，稳定可靠，避开choco/vcpkg/404二进制下载问题
-      - name: Install libvips via winget
+      # 用ghproxy加速官方二进制包，静默部署，避开winget交互协议弹窗
+      - name: Install libvips from mirrored official binary
         shell: pwsh
         run: |
-          winget install --id libvips.libvips -e --force
-          $vipsExe = Get-Command vips.exe -ErrorAction SilentlyContinue
-          if ($vipsExe) {
-            Split-Path $vipsExe.Source | Out-File -FilePath $env:GITHUB_PATH -Append
-          }
+          $vipsVer = "8.18.2"
+          $zipUrl = "https://ghproxy.com/https://github.com/libvips/libvips/releases/download/v$vipsVer/vips-dev-w64-all-$vipsVer.zip"
+          $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
+          $dest = "C:\vips"
 
-      # 校验libvips安装成功
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+          Expand-Archive -Path $zipFile -DestinationPath $dest -Force
+
+          $binDir = Join-Path $dest "vips-dev-w64-all-$vipsVer\bin"
+          echo $binDir | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          $pkgPath = Join-Path $dest "vips-dev-w64-all-$vipsVer\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$pkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Verify vips installation
         run: vips --version
 
-      # 执行Tauri打包编译生成Windows程序
       - name: Build Tauri Windows App
         run: npx tauri build
 
-      # 上传编译产物，构建完成可在任务Artifacts下载
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
