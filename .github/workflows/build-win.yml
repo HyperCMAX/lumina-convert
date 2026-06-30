@@ -2,55 +2,47 @@ name: Build Windows EXE
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # 支持网页手动触发构建
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      # 拉取仓库源码
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 配置Node.js 22（官方稳定支持，无需废弃放行变量，复用runner预装快速完成）
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # 安装稳定版pnpm
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      # 安装JS依赖，放行esbuild构建脚本，解决pnpm拦截报错
+      # 移除 --allow-build 无效参数，依靠配置文件放行esbuild
       - name: Install JS dependencies
-        run: pnpm install --allow-build=esbuild
+        run: pnpm install
 
-      # 执行前端项目构建（匹配项目package.json里build脚本）
       - name: Build frontend
         run: pnpm run build
 
-      # 配置Rust稳定编译工具链，Tauri编译核心依赖
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存Rust编译依赖，加速重复构建
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 安装vcpkg与libvips依赖（按需保留，项目无需可删除此步骤）
+      # 不需要libvips可删除此步骤
       - name: Install libvips via vcpkg
         run: |
           choco install vcpkg
           vcpkg install libvips:x64-windows
 
-      # 执行Tauri打包编译，生成Windows EXE、MSI安装包
       - name: Build Tauri Windows App
         run: pnpm tauri build
 
-      # 上传编译产物到CI制品，构建完成后可下载
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
