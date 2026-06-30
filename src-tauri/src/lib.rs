@@ -354,18 +354,29 @@ async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHan
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // 🚨 核心截胡：在 libvips 初始化前，强行注入 DLL 路径
+            // 🚨 核心截胡：保留目录结构，精准引导 libvips 解码模块
             if let Ok(resource_dir) = app.path().resource_dir() {
-                let dir_str = resource_dir.to_string_lossy().to_string();
-                let current_path = std::env::var("PATH").unwrap_or_default();
-                #[cfg(target_os = "windows")]
-                std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
-                #[cfg(not(target_os = "windows"))]
-                std::env::set_var("PATH", format!("{}:{}", dir_str, current_path));
-                std::env::set_var("VIPS_MODULE_PATH", &dir_str);
+                let vips_bin = resource_dir.join("vips").join("bin");
+                let vips_lib = resource_dir.join("vips").join("lib");
+
+                if vips_bin.exists() && vips_lib.exists() {
+                    let bin_str = vips_bin.to_string_lossy().to_string();
+                    let lib_str = vips_lib.to_string_lossy().to_string();
+
+                    // 1. 注入 PATH (让系统能找到 libvips-42.dll 和 libheif.dll)
+                    let current_path = std::env::var("PATH").unwrap_or_default();
+                    std::env::set_var("PATH", format!("{};{}", bin_str, current_path));
+
+                    // 2. 🚨 核心：注入 VIPS_MODULE_PATH (指向 lib/，让 libvips 找到 vips-modules-8.x/vips-heif.dll)
+                    std::env::set_var("VIPS_MODULE_PATH", &lib_str);
+
+                    println!("🚀 libvips 目录结构注入成功: bin={}, lib={}", bin_str, lib_str);
+                } else {
+                    eprintln!("⚠️ 致命错误：未找到 resources/vips/bin 或 lib 目录！请检查打包配置。");
+                }
             }
 
-            // 🚨 DLL 路径注入后，再初始化 libvips (此时 PATH 已包含 resources 目录)
+            // 🚨 环境变量注入后，再初始化 libvips (此时 PATH 已包含 resources/vips/bin)
             let vips = VipsApp::new("LuminaConvert", false)
                 .expect("致命错误: 无法初始化 libvips 引擎，请检查系统是否安装了 vips");
             vips.concurrency_set(num_cpus::get() as i32);

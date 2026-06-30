@@ -52,26 +52,27 @@ jobs:
       - name: Verify vips installation
         run: vips --version
 
-      # 🚨 核心魔法：注入 all 版全量 DLL (突破 Windows 专利壁垒)
-      - name: Inject Full DLL Bundle (Windows Only)
+      # 🚨 核心魔法：原封不动保留目录结构，注入全量 vips (突破 Windows 专利壁垒)
+      - name: Inject Full vips Bundle with Directory Structure
         shell: pwsh
         run: |
-          Write-Host "Copying all DLLs from vips-dev-x64-all variant..."
-          $vipsBin = "C:\vips\vips-dev-8.18\bin"
+          Write-Host "Copying entire vips directory preserving structure..."
           New-Item -ItemType Directory -Force -Path "src-tauri/resources"
-          Copy-Item -Path "$vipsBin\*.dll" -Destination "src-tauri/resources/" -Force -Verbose
-          Write-Host "Full DLL bundle injected ($((Get-ChildItem 'src-tauri/resources/*.dll').Count) files)"
+          Copy-Item -Path "C:\vips\vips-dev-8.18" -Destination "src-tauri/resources\vips" -Recurse -Force -Verbose
+          Write-Host "vips directory bundled at src-tauri/resources/vips/"
+          Get-ChildItem "src-tauri/resources/vips/lib" -Recurse -Filter "*.dll" | ForEach-Object { Write-Host "  module: $($_.FullName)" }
+
+      - name: Setup libvips Linking Environment
+        shell: pwsh
+        run: |
+          $vips_root = "${{ github.workspace }}\src-tauri\resources\vips"
+          echo "LIBVIPS_LIB_DIR=$vips_root\lib" >> $env:GITHUB_ENV
+          echo "LIBVIPS_INCLUDE_DIR=$vips_root\include" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$vips_root\lib\pkgconfig" >> $env:GITHUB_ENV
+          Write-Host "libvips link env configured: $vips_root"
 
       - name: Build Tauri Windows App
         run: npx tauri build
-
-      - name: Copy vips DLLs alongside EXE (for portable standalone exe)
-        shell: pwsh
-        run: |
-          $vipsBin = "C:\vips\vips-dev-8.18\bin"
-          $releaseDir = "src-tauri\target\release"
-          Write-Host "Copying DLLs from $vipsBin to $releaseDir ..."
-          Copy-Item -Path "$vipsBin\*.dll" -Destination $releaseDir -Force -Verbose
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
