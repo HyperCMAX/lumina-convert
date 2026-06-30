@@ -7,7 +7,6 @@ use crate::Result;
 
 use num_traits::{FromPrimitive, ToPrimitive};
 use std::borrow::Cow;
-use std::convert::TryInto;
 use std::ffi::*;
 use std::ptr::null_mut;
 

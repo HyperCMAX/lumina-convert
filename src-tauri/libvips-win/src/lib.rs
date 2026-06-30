@@ -43,7 +43,7 @@ impl VipsApp {
         }
     }
     
-    pub fn get_disc_threshold(&self) -> usize {
+    pub fn get_disc_threshold(&self) -> u64 {
         unsafe { bindings::vips_get_disc_threshold() }
     }
     
