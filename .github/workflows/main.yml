@@ -55,6 +55,14 @@ jobs:
       - name: Build Tauri Windows App
         run: npx tauri build
 
+      - name: Copy vips DLLs alongside EXE
+        shell: pwsh
+        run: |
+          $vipsBin = "C:\vips\vips-dev-8.18\bin"
+          $releaseDir = "src-tauri\target\release"
+          Write-Host "Copying DLLs from $vipsBin to $releaseDir ..."
+          Copy-Item -Path "$vipsBin\*.dll" -Destination $releaseDir -Force -Verbose
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
