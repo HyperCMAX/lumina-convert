@@ -13,32 +13,18 @@
 edition = "2021"
 name = "libvips"
 version = "2.3.0"
-authors = [
-    "Andrew Basson <andrew.basson@olx.com>",
-    "Bogdan Vidrean <bogdan.vidrean@olx.com>",
-]
 build = "build.rs"
-exclude = ["generator"]
-autolib = false
-autobins = false
-autoexamples = false
-autotests = false
-autobenches = false
-description = "Safe bindings for libvips"
-readme = "README.md"
-keywords = [
-    "libvips",
-    "bindgen",
-    "image",
-    "bindings",
-]
-categories = [
-    "multimedia::images",
-    "multimedia::encoding",
-    "graphics",
-]
-license = "MIT"
-repository = "https://github.com/olxgroup-oss/libvips-rust-bindings"
+
+[lib]
+name = "libvips"
+path = "src/lib.rs"
+
+[build-dependencies]
+bindgen = "0.72"
+
+[dependencies]
+num-derive = "0.4.2"
+num-traits = "0.2.19"
 
 [package.metadata.release]
 pre-release-commit-message = "release version {{version}}"
