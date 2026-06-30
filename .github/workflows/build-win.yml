@@ -1,0 +1,42 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        shell: pwsh
+        run: npm install -g pnpm
+
+      - name: Install JS deps
+        run: pnpm install
+
+      - name: Install libvips (vcpkg)
+        shell: pwsh
+        run: |
+          vcpkg install libvips --triplet x64-windows
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "LIBS=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "INCLUDE=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\include" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install cargo-vcpkg
+        run: cargo install cargo-vcpkg
+
+      - name: Build
+        run: pnpm tauri build
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuminaConvert-Windows
+          path: src-tauri/target/release/LuminaConvert.exe
+          if-no-files-found: error
