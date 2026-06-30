@@ -33,14 +33,31 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 用 choco 直接装 libvips，不用绕 vcpkg
-      - name: Install libvips via Chocolatey
+      # 从libvips官方Release拉取预编译Windows二进制包、解压并注入PATH
+      - name: Install libvips from official release binary
+        shell: pwsh
         run: |
-          choco install libvips -y
-          # 把 vips 二进制目录加入PATH，让后续进程能找到
-          echo "C:\ProgramData\chocolatey\lib\libvips\tools\vips-dev-w64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          # 选定版本，可替换为最新版
+          $vipsVersion = "8.18.0"
+          $zipUrl = "https://github.com/libvips/libvips/releases/download/v$vipsVersion/vips-dev-w64-all-$vipsVersion.zip"
+          $zipPath = Join-Path $env:RUNNER_TEMP vips.zip
+          $installRoot = "C:\vips"
+          
+          # 下载压缩包
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+          # 解压到目标目录
+          Expand-Archive -Path $zipPath -DestinationPath $installRoot -Force
+          # 拼接bin目录路径
+          $vipsBinPath = Join-Path $installRoot "vips-dev-w64-all-$vipsVersion\bin"
+          # 写入GITHUB_PATH，后续步骤可调用vips.exe、加载dll
+          echo $vipsBinPath | Out-File -FilePath $env:GITHUB_PATH -Append
+          
+          # 可选：设置pkg-config路径，方便Rust编译时找到头文件/库
+          $env:PKG_CONFIG_PATH = Join-Path $installRoot "vips-dev-w64-all-$vipsVersion\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Verify vips install
+      # 校验安装是否成功
+      - name: Verify vips installation
         run: vips --version
 
       - name: Build Tauri Windows App
