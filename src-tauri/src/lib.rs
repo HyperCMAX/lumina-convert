@@ -370,6 +370,7 @@ pub fn run() {
                     // 2. 🚨 核心：注入 VIPS_MODULE_PATH (指向 lib/，让 libvips 找到 vips-modules-8.x/vips-heif.dll)
                     std::env::set_var("VIPS_MODULE_PATH", &lib_str);
 
+                    std::env::set_var("VIPS_WARNING", "0");
                     println!("🚀 libvips 目录结构注入成功: bin={}, lib={}", bin_str, lib_str);
                 } else {
                     eprintln!("⚠️ 致命错误：未找到 resources/vips/bin 或 lib 目录！请检查打包配置。");
