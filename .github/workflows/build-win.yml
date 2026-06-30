@@ -23,15 +23,17 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # 指定安装 GNU 编译目标
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
 
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      # 自动定位vips路径，杜绝硬编码目录名错误
       - name: Install libvips official prebuilt binary
         shell: pwsh
         run: |
@@ -40,24 +42,17 @@ jobs:
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
           $installRoot = "C:\vips"
 
-          # 下载压缩包
           curl -L -o "$zipFile" "$zipUrl"
-          # 解压
           Expand-Archive -Path $zipFile -DestinationPath $installRoot -Force
 
-          # 自动查找vips.exe所在的bin目录，避免硬编码目录名出错
           $vipsExe = Get-ChildItem -Path $installRoot -Filter vips.exe -Recurse | Select-Object -First 1
           if (-not $vipsExe) {
-            Write-Error "vips.exe not found in extracted files"
+            Write-Error "vips.exe not found"
             exit 1
           }
           $binPath = $vipsExe.DirectoryName
-          Write-Host "Found vips.exe at: $binPath"
-
-          # 写入PATH，确保后续步骤生效
           $binPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-          # 自动查找pkgconfig目录
           $pkgConfig = Get-ChildItem -Path $installRoot -Filter pkgconfig -Recurse -Directory | Select-Object -First 1
           if ($pkgConfig) {
             echo "PKG_CONFIG_PATH=$($pkgConfig.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -66,15 +61,15 @@ jobs:
       - name: Verify vips installation
         run: vips --version
 
+      # 用 GNU 目标构建，匹配预生成绑定的 ABI
       - name: Build Tauri Windows App
-        run: npx tauri build
+        run: npx tauri build --target x86_64-pc-windows-gnu
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-tauri-exe-package
           path: |
-            target/release/*.exe
-            target/release/*.msi
-            target/release/*.zip
-            target/release/*.nupkg
+            target/x86_64-pc-windows-gnu/release/*.exe
+            target/x86_64-pc-windows-gnu/release/*.msi
+            target/x86_64-pc-windows-gnu/release/*.zip
