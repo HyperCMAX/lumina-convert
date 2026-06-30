@@ -23,7 +23,7 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # 指定安装 GNU 编译目标
+      # 安装 Rust 并指定 GNU 编译目标，解决绑定结构体溢出
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -34,6 +34,7 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # 修复：无 BOM 编码写入 PATH，确保跨步骤生效
       - name: Install libvips official prebuilt binary
         shell: pwsh
         run: |
@@ -42,26 +43,37 @@ jobs:
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
           $installRoot = "C:\vips"
 
+          # 下载解压
           curl -L -o "$zipFile" "$zipUrl"
           Expand-Archive -Path $zipFile -DestinationPath $installRoot -Force
 
+          # 递归查找 vips.exe 位置
           $vipsExe = Get-ChildItem -Path $installRoot -Filter vips.exe -Recurse | Select-Object -First 1
           if (-not $vipsExe) {
-            Write-Error "vips.exe not found"
+            Write-Error "vips.exe not found in extracted files"
             exit 1
           }
           $binPath = $vipsExe.DirectoryName
-          $binPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Found vips.exe at: $binPath"
 
+          # 无 BOM UTF-8 写入 GITHUB_PATH，修复编码导致的 PATH 失效
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          [System.IO.File]::AppendAllText($env:GITHUB_PATH, "$binPath`n", $utf8NoBom)
+
+          # 同步写入 pkgconfig 环境变量
           $pkgConfig = Get-ChildItem -Path $installRoot -Filter pkgconfig -Recurse -Directory | Select-Object -First 1
           if ($pkgConfig) {
-            echo "PKG_CONFIG_PATH=$($pkgConfig.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            $pkgLine = "PKG_CONFIG_PATH=$($pkgConfig.FullName)"
+            [System.IO.File]::AppendAllText($env:GITHUB_ENV, "$pkgLine`n", $utf8NoBom)
           }
+
+          # 同步骤内先验证一次，确认路径有效
+          & $vipsExe.FullName --version
 
       - name: Verify vips installation
         run: vips --version
 
-      # 用 GNU 目标构建，匹配预生成绑定的 ABI
+      # GNU 目标构建，匹配 libvips 绑定 ABI
       - name: Build Tauri Windows App
         run: npx tauri build --target x86_64-pc-windows-gnu
 
