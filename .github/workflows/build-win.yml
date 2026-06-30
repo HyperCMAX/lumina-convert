@@ -46,9 +46,4 @@ jobs:
       with:
       node-version: 20
 
-      - name: Install pnpm
-      uses: pnpm/action-setup@v4
-      with:
-      version: 9
-
       run: pnpm install --strict-dep-builds=false
