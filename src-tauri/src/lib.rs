@@ -11,7 +11,7 @@ use thread_priority::{ThreadPriority, set_current_thread_priority};
 use std::convert::TryInto;
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{Emitter, AppHandle};
+use tauri::{Emitter, AppHandle, Manager};
 use walkdir::WalkDir;
 
 use libvips::{VipsApp, VipsImage, ops};
@@ -78,7 +78,7 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
 
     // 🚨 双保险解码：先试文件读取（格式检测最准），失败再回退内存解码（免疫中文路径）
     let img = VipsImage::new_from_file(path)
-        .or_else(|e1| {
+        .or_else(|_e1| {
             let data = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
             VipsImage::new_from_buffer(&data, "")
                 .map_err(|e2| {
