@@ -56,16 +56,17 @@ jobs:
       - name: Inject HEIC Decoders (Windows Only)
         shell: pwsh
         run: |
-          Write-Host "Downloading full libvips binaries with HEIF support..."
-          $vipsFullVer = "8.15.2"
-          $zipUrl = "https://github.com/libvips/libvips/releases/download/v$vipsFullVer/vips-dev-w64-web-$vipsFullVer.zip"
-          $zipFile = Join-Path $env:RUNNER_TEMP vips_full.zip
+          Write-Host "Downloading libvips web variant with HEIF support..."
+          $vipsVer = "8.18.2"
+          $dirVer = "8.18"
+          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-web-$vipsVer.zip"
+          $zipFile = Join-Path $env:RUNNER_TEMP vips_web.zip
           curl -L -o $zipFile $zipUrl
-          Expand-Archive $zipFile -DestinationPath "vips_temp" -Force
+          Expand-Archive $zipFile -DestinationPath "vips_web" -Force
           New-Item -ItemType Directory -Force -Path "src-tauri/resources"
-          Copy-Item "vips_temp/vips-dev-8.15/bin/libheif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
-          Copy-Item "vips_temp/vips-dev-8.15/bin/libde265.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
-          Copy-Item "vips_temp/vips-dev-8.15/bin/vips-heif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
+          Copy-Item "vips_web/vips-dev-$dirVer/bin/libheif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
+          Copy-Item "vips_web/vips-dev-$dirVer/bin/libde265.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
+          Copy-Item "vips_web/vips-dev-$dirVer/bin/vips-heif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
           Write-Host "HEIC Decoders injected successfully!"
 
       - name: Build Tauri Windows App
