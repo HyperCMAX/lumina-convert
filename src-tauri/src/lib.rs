@@ -76,10 +76,13 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
         _ => options.format.as_str()
     };
 
-    // 🚨 终极修复：使用 Buffer 内存解码，彻底免疫 Windows 中文路径诅咒
-    let file_data = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
-    let img = VipsImage::new_from_buffer(&file_data, "")
-        .map_err(|e| format!("硬件解码失败(可能为损坏文件): {:?}", e))?;
+    // 🚨 双保险解码：先试文件读取（格式检测最准），失败再回退内存解码（免疫中文路径）
+    let img = VipsImage::new_from_file(path)
+        .or_else(|_| {
+            let data = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
+            VipsImage::new_from_buffer(&data, "")
+                .map_err(|e| format!("硬件解码失败(可能为损坏文件): {:?}", e))
+        })?;
 
     let mut proc = ops::autorot(&img)
         .map_err(|e| format!("自动旋转失败: {:?}", e))?;
