@@ -1,0 +1,63 @@
+name: Build Windows EXE
+
+# 触发方式：手动运行 + 推送到main分支自动运行
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 固定Node 20 LTS，规避Node24新策略/废弃提示问题
+      - name: Setup Node.js 20 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      # 安装指定版本pnpm
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # 核心：放行esbuild构建脚本，解决 ERR_PNPM_IGNORED_BUILDS
+      - name: Install JS dependencies
+        run: pnpm install --allow-build=esbuild
+
+      # 可选：运行前端构建（如果不在tauri配置beforeBuildCommand里）
+      - name: Build frontend
+        run: pnpm run build
+
+      # 配置Rust稳定工具链
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 缓存Rust编译依赖加速后续运行
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+
+      # 安装Tauri构建所需Windows依赖（VC++构建工具等，镜像自带，补充可选vcpkg）
+      - name: Install libvips via vcpkg
+        run: |
+          choco install vcpkg
+          vcpkg install libvips:x64-windows
+
+      # 执行Tauri编译打包生成EXE/安装包
+      - name: Build Tauri Windows App
+        run: pnpm tauri build
+
+      # 上传编译产物（target/release下exe、msi安装包等）作为CI制品
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-build
+          path: |
+            target/release/*.exe
+            target/release/*.msi
+            target/release/*.zip
