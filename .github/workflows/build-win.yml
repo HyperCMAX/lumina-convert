@@ -16,24 +16,16 @@ jobs:
       - name: Install JS deps
         run: npm install
 
-      - name: Install libvips via vcpkg
+      - name: Install libvips (prebuilt binary)
         shell: pwsh
         run: |
-          vcpkg install libvips --triplet x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Verify vips headers
-        shell: pwsh
-        run: |
-          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
-          $inc = "$vcpkg\installed\x64-windows\include"
-          Write-Host "Include dir: $inc"
-          if (Test-Path "$inc\vips\vips.h") {
-            Write-Host "vips/vips.h found!" -ForegroundColor Green
-          } else {
-            Write-Host "vips/vips.h NOT found at $inc" -ForegroundColor Red
-            Get-ChildItem $inc -Recurse -Filter "vips.h" | Select-Object -First 5
-          }
+          $vipsver = "8.16.1"
+          $url = "https://github.com/libvips/libvips/releases/download/v$vipsver/vips-dev-w64-all-$vipsver.zip"
+          $zip = "$env:TEMP\vips.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\vips" -Force
+          echo "VIPS_INCLUDE_DIR=$env:TEMP\vips\vips-dev-$vipsver\include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "$env:TEMP\vips\vips-dev-$vipsver\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Build Tauri App
         run: npm run tauri build
