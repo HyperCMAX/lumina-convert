@@ -17,6 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[patch.crates-io]
+libvips = { path = "libvips-win" }
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
@@ -27,8 +30,6 @@ rayon = "1.10"
 walkdir = "2.5"
 tauri-plugin-dialog = "2.7.1"
 num_cpus = "1.17"
-
-# 🚨 工业级引擎: libvips — 自动调用 Apple Silicon 媒体硬件加速
 libvips = "2.3"
 
 # 🚨 跨平台打开目录/文件

@@ -10,5 +10,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 /target
 /src-tauri/target
+/src-tauri/libvips-win/target
 *.exe
 *.msi
