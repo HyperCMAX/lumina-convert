@@ -20,16 +20,15 @@ jobs:
         shell: pwsh
         run: |
           $vipsver = "8.18.3"
+          $dirver = "8.18"
           $url = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsver/vips-dev-x64-all-$vipsver.zip"
           $zip = "$env:TEMP\vips.zip"
           Write-Host "Downloading $url ..."
           Invoke-WebRequest -Uri $url -OutFile $zip -Verbose
           Write-Host "Extracting $zip to $env:TEMP\vips ..."
           Expand-Archive -Path $zip -DestinationPath "$env:TEMP\vips" -Force -Verbose
-          $prefix = "$env:TEMP\vips\vips-dev-x64-$vipsver"
+          $prefix = "$env:TEMP\vips\vips-dev-$dirver"
           Write-Host "prefix: $prefix"
-          Write-Host "Contents of $env:TEMP\vips:"
-          Get-ChildItem "$env:TEMP\vips"
           echo "VIPS_INCLUDE_DIR=$prefix\include" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "VIPS_LIB_DIR=$prefix\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "$prefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
