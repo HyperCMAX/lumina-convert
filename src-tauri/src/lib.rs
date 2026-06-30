@@ -352,22 +352,25 @@ async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHan
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _vips = VipsApp::new("LuminaConvert", false)
-        .expect("致命错误: 无法初始化 libvips 引擎，请检查系统是否安装了 vips");
-    _vips.concurrency_set(num_cpus::get() as i32);
-
     tauri::Builder::default()
         .setup(|app| {
-            // 🚨 核心魔法：动态注入 resources 目录路径，让 libvips 能找到 HEIC 解码 DLL
+            // 🚨 核心截胡：在 libvips 初始化前，强行注入 DLL 路径
             if let Ok(resource_dir) = app.path().resource_dir() {
                 let dir_str = resource_dir.to_string_lossy().to_string();
-                std::env::set_var("VIPS_MODULE_PATH", &dir_str);
                 let current_path = std::env::var("PATH").unwrap_or_default();
                 #[cfg(target_os = "windows")]
                 std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
                 #[cfg(not(target_os = "windows"))]
                 std::env::set_var("PATH", format!("{}:{}", dir_str, current_path));
+                std::env::set_var("VIPS_MODULE_PATH", &dir_str);
             }
+
+            // 🚨 DLL 路径注入后，再初始化 libvips (此时 PATH 已包含 resources 目录)
+            let vips = VipsApp::new("LuminaConvert", false)
+                .expect("致命错误: 无法初始化 libvips 引擎，请检查系统是否安装了 vips");
+            vips.concurrency_set(num_cpus::get() as i32);
+            std::mem::forget(vips); // 防止 drop 导致 libvips shutdown
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())

@@ -52,22 +52,15 @@ jobs:
       - name: Verify vips installation
         run: vips --version
 
-      # 🚨 核心魔法：注入 HEIC/HIF 解码器 (突破 Windows 专利壁垒)
-      - name: Inject HEIC Decoders (Windows Only)
+      # 🚨 核心魔法：注入 all 版全量 DLL (突破 Windows 专利壁垒)
+      - name: Inject Full DLL Bundle (Windows Only)
         shell: pwsh
         run: |
-          Write-Host "Downloading libvips web variant with HEIF support..."
-          $vipsVer = "8.18.2"
-          $dirVer = "8.18"
-          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-web-$vipsVer.zip"
-          $zipFile = Join-Path $env:RUNNER_TEMP vips_web.zip
-          curl -L -o $zipFile $zipUrl
-          Expand-Archive $zipFile -DestinationPath "vips_web" -Force
+          Write-Host "Copying all DLLs from vips-dev-x64-all variant..."
+          $vipsBin = "C:\vips\vips-dev-8.18\bin"
           New-Item -ItemType Directory -Force -Path "src-tauri/resources"
-          Copy-Item "vips_web/vips-dev-$dirVer/bin/libheif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
-          Copy-Item "vips_web/vips-dev-$dirVer/bin/libde265.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
-          Copy-Item "vips_web/vips-dev-$dirVer/bin/vips-heif.dll" "src-tauri/resources/" -ErrorAction SilentlyContinue
-          Write-Host "HEIC Decoders injected successfully!"
+          Copy-Item -Path "$vipsBin\*.dll" -Destination "src-tauri/resources/" -Force -Verbose
+          Write-Host "Full DLL bundle injected ($((Get-ChildItem 'src-tauri/resources/*.dll').Count) files)"
 
       - name: Build Tauri Windows App
         run: npx tauri build
