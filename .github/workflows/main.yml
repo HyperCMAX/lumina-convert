@@ -55,7 +55,7 @@ jobs:
       - name: Build Tauri Windows App
         run: npx tauri build
 
-      - name: Copy vips DLLs alongside EXE
+      - name: Copy vips DLLs alongside EXE (for portable standalone exe)
         shell: pwsh
         run: |
           $vipsBin = "C:\vips\vips-dev-8.18\bin"

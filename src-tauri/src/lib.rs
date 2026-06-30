@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::panic;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use once_cell::sync::Lazy;
@@ -14,6 +15,11 @@ use tauri::{Emitter, AppHandle};
 use walkdir::WalkDir;
 
 use libvips::{VipsApp, VipsImage, ops};
+
+// 🚨 终极魔法：直接调用 libvips C 库底层 API，动态修改其内部线程池大小
+extern "C" {
+    fn vips_concurrency_set(concurrency: i32);
+}
 
 static RAYON_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
     ThreadPoolBuilder::new()
@@ -27,9 +33,7 @@ static RAYON_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
         .expect("致命错误: 无法初始化 Rayon 低优先级线程池")
 });
 
-static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
-static COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);
-static RENAME_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static CURRENT_TOKEN: Lazy<Mutex<Option<Arc<AtomicBool>>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Deserialize, Clone)]
 pub struct ConvertOptions {
@@ -41,6 +45,8 @@ pub struct ConvertOptions {
     pub resize_value: u32,
     pub bit_depth: String,
     pub rename_template: String,
+    pub concurrency: u32,
+    pub perf_mode: String,
 }
 
 fn get_safe_output_path(dir: &Path, stem: &str, original_ext: &str, preset: &str, ext: &str) -> PathBuf {
@@ -70,8 +76,10 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
         _ => options.format.as_str()
     };
 
-    let img = VipsImage::new_from_file(path)
-        .map_err(|e| format!("硬件解码失败: {:?}", e))?;
+    // 🚨 终极修复：使用 Buffer 内存解码，彻底免疫 Windows 中文路径诅咒
+    let file_data = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let img = VipsImage::new_from_buffer(&file_data, "")
+        .map_err(|e| format!("硬件解码失败(可能为损坏文件): {:?}", e))?;
 
     let mut proc = ops::autorot(&img)
         .map_err(|e| format!("自动旋转失败: {:?}", e))?;
@@ -140,51 +148,61 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
         ext
     );
 
-    let meta_param = match options.metadata.as_str() {
-        "strip" => "strip",
-        "icc" => "keep=icc-profile",
-        _ => ""
-    };
+    let mut meta_params = vec![];
+    if options.metadata == "strip" { meta_params.push("strip".to_string()); }
+    else if options.metadata == "icc" { meta_params.push("keep=icc".to_string()); }
 
     let save_options = match options.format.as_str() {
         "jpeg" => {
             let q = match options.preset.as_str() { "fast" => 60, "standard" => 80, "high" => 95, "lossless" => 100, _ => 80 };
-            format!(".jpg[Q={},optimize_coding,{}]", q, meta_param)
+            let mut params = vec![format!("Q={}", q), "optimize_coding".to_string()];
+            params.extend(meta_params);
+            format!(".jpg[{}]", params.join(","))
         },
         "png" => {
             let compression = match options.preset.as_str() { "fast" => 1, "standard" => 6, "high" => 9, "lossless" => 9, _ => 6 };
-            format!(".png[compression={},{}]", compression, meta_param)
+            let mut params = vec![format!("compression={}", compression)];
+            params.extend(meta_params);
+            format!(".png[{}]", params.join(","))
         },
         "webp" | "heic" => {
-            if options.preset == "lossless" {
-                format!(".webp[lossless,{}]", meta_param)
+            let mut params = if options.preset == "lossless" {
+                vec!["lossless".to_string()]
             } else {
                 let q = match options.preset.as_str() { "fast" => 60, "standard" => 80, "high" => 95, _ => 80 };
-                format!(".webp[Q={},{}]", q, meta_param)
-            }
+                vec![format!("Q={}", q)]
+            };
+            params.extend(meta_params);
+            format!(".webp[{}]", params.join(","))
         },
         "avif" => {
             let q = match options.preset.as_str() { "fast" => 50, "standard" => 70, "high" => 90, "lossless" => 100, _ => 70 };
-            if options.preset == "lossless" {
-                format!(".avif[lossless,{}]", meta_param)
+            let mut params = if options.preset == "lossless" {
+                vec!["lossless".to_string()]
             } else {
-                format!(".avif[Q={},{}]", q, meta_param)
-            }
+                vec![format!("Q={}", q)]
+            };
+            params.extend(meta_params);
+            format!(".avif[{}]", params.join(","))
         },
         "jxl" => {
             let q = match options.preset.as_str() { "fast" => 70, "standard" => 85, "high" => 95, "lossless" => 100, _ => 85 };
-            if options.preset == "lossless" {
-                format!(".jxl[lossless,{}]", meta_param)
+            let mut params = if options.preset == "lossless" {
+                vec!["lossless".to_string()]
             } else {
-                format!(".jxl[Q={},{}]", q, meta_param)
-            }
+                vec![format!("Q={}", q)]
+            };
+            params.extend(meta_params);
+            format!(".jxl[{}]", params.join(","))
         },
         "tiff" => {
             let compression = if options.preset == "fast" { "none" } else { "lzw" };
-            format!(".tiff[compression={},{}]", compression, meta_param)
+            let mut params = vec![format!("compression={}", compression)];
+            params.extend(meta_params);
+            format!(".tiff[{}]", params.join(","))
         },
-        "bmp" => format!(".bmp[{}]", meta_param),
-        "gif" => format!(".gif[{}]", meta_param),
+        "bmp" => format!(".bmp[{}]", meta_params.join(",")),
+        "gif" => format!(".gif[{}]", meta_params.join(",")),
         _ => return Err("不支持的格式".to_string())
     };
 
@@ -198,28 +216,32 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
 }
 
 #[tauri::command]
-fn scan_folder(path: String) -> Result<Vec<String>, String> {
-    let mut images = Vec::new();
-    let valid_exts = ["jpg", "jpeg", "png", "heic", "heif", "hif", "webp", "avif", "jxl", "tiff", "tif", "bmp", "gif", "svg", "pdf"];
-
-    for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
-        if images.len() >= 5000 { break; }
-
-        if entry.file_type().is_file() {
-            if let Some(ext) = entry.path().extension() {
-                let ext_str = ext.to_string_lossy().to_lowercase();
-                if valid_exts.contains(&ext_str.as_str()) {
-                    images.push(entry.path().to_string_lossy().into_owned());
+async fn scan_folder(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut images = Vec::new();
+        let valid_exts = ["jpg", "jpeg", "png", "heic", "heif", "hif", "webp", "avif", "jxl", "tiff", "tif", "bmp", "gif", "svg", "pdf"];
+        
+        for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+            if images.len() >= 5000 { break; } 
+            
+            if entry.file_type().is_file() {
+                if let Some(ext) = entry.path().extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    if valid_exts.contains(&ext_str.as_str()) {
+                        images.push(entry.path().to_string_lossy().into_owned());
+                    }
                 }
             }
         }
-    }
-    Ok(images)
+        Ok(images)
+    }).await.unwrap_or(Err("扫描任务崩溃".to_string()))
 }
 
 #[tauri::command]
 fn cancel_conversion() {
-    CANCEL_FLAG.store(true, Ordering::Relaxed);
+    if let Some(token) = CURRENT_TOKEN.lock().unwrap().as_ref() {
+        token.store(true, Ordering::Relaxed);
+    }
 }
 
 #[tauri::command]
@@ -229,9 +251,11 @@ fn open_output_dir(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHandle) -> Result<String, String> {
-    CANCEL_FLAG.store(false, Ordering::Relaxed);
-    COMPLETED_COUNT.store(0, Ordering::Relaxed);
-    RENAME_COUNTER.store(1, Ordering::Relaxed);
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    let rename_counter = Arc::new(AtomicUsize::new(1));
+    let completed_count = Arc::new(AtomicUsize::new(0));
+
+    *CURRENT_TOKEN.lock().unwrap() = Some(cancel_token.clone());
 
     let out_dir_path = Path::new(&options.output_dir);
     if !out_dir_path.exists() || !out_dir_path.is_dir() {
@@ -240,28 +264,48 @@ async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHan
 
     let total_files = paths.len();
 
+    let app_handle = app.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let cpu_cores = num_cpus::get();
+        let (max_tasks, vips_threads) = match options.perf_mode.as_str() {
+            "background" => (2.max(options.concurrency as usize), 1),
+            "balanced" => {
+                let half = (cpu_cores / 2).max(2);
+                (if options.concurrency > 0 { options.concurrency as usize } else { half }, half as i32)
+            },
+            _ => {
+                (if options.concurrency > 0 { options.concurrency as usize } else { cpu_cores }, cpu_cores as i32)
+            }
+        };
+
+        // 🚨 终极安全：在单线程上下文中配置 libvips C 库全局状态 (只执行一次，绝不污染并发环境)
+        unsafe { vips_concurrency_set(vips_threads); }
+
+        let (tx, rx) = flume::bounded(max_tasks);
+        for _ in 0..max_tasks { tx.send(()).unwrap(); }
+        let rx = Arc::new(rx);
+        let tx = Arc::new(tx);
+
         let results: Vec<Result<String, String>> = RAYON_POOL.install(|| {
             paths
                 .into_par_iter()
                 .map(|path| {
-                    if CANCEL_FLAG.load(Ordering::Relaxed) {
-                        return Err("用户取消".to_string());
-                    }
-
-                    let current_counter = RENAME_COUNTER.fetch_add(1, Ordering::SeqCst);
-
+                    if cancel_token.load(Ordering::Relaxed) { return Err("用户取消".to_string()); }
+                    
+                    let _token = rx.recv().unwrap(); 
+                    let current_counter = rename_counter.fetch_add(1, Ordering::SeqCst);
+                    
                     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         convert_single_image(&path, &options, current_counter)
                     }));
-
-                    let current = COMPLETED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    let filename = Path::new(&path).file_name()
-                        .unwrap_or_default().to_string_lossy().to_string();
+                    let _ = tx.send(()); 
+                    
+                    let done = completed_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    let filename = Path::new(&path).file_name().unwrap_or_default().to_string_lossy().to_string();
                     let is_success = result.is_ok() && result.as_ref().unwrap().is_ok();
 
-                    let _ = app.emit("convert-progress", json!({
-                        "current": current,
+                    let _ = app_handle.emit("convert-progress", json!({
+                        "completed": done,
                         "total": total_files,
                         "filename": filename,
                         "status": if is_success { "success" } else { "failed" }
@@ -278,15 +322,19 @@ async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHan
 
         let success_count = results.iter().filter(|r| r.is_ok()).count();
         let fail_count = results.len() - success_count;
-        let canceled = CANCEL_FLAG.load(Ordering::Relaxed);
+        let canceled = cancel_token.load(Ordering::Relaxed);
 
-        if canceled {
-            format!("任务已安全终止！成功: {} 张，跳过: {} 张", success_count, total_files - success_count)
-        } else {
-            format!("批量处理完成！成功: {} 张，失败/隔离: {} 张", success_count, fail_count)
-        }
+        // 🚨 任务完成，发送系统原生通知事件
+        let _ = app_handle.emit("conversion-finished", json!({
+            "success": success_count,
+            "failed": fail_count
+        }));
+
+        if canceled { format!("任务已安全终止！成功: {} 张", success_count) } 
+        else { format!("批量处理完成！成功: {} 张，失败: {} 张", success_count, fail_count) }
     }).await.map_err(|e| format!("任务调度崩溃: {}", e))?;
 
+    *CURRENT_TOKEN.lock().unwrap() = None;
     Ok(result)
 }
 
@@ -299,6 +347,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             process_images,
             scan_folder,

@@ -4,9 +4,14 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
+  import { LazyStore } from '@tauri-apps/plugin-store';
+  import { sendNotification } from '@tauri-apps/plugin-notification';
 
-  let files: string[] = $state([]);
-  let selectedIndices: Set<number> = $state(new Set());
+  const store = new LazyStore('settings.dat');
+
+  interface FileItem { id: string; path: string; }
+  let files: FileItem[] = $state([]);
+  let selectedIds: Set<string> = $state(new Set());
   let isProcessing = $state(false);
   let statusMessage = $state("等待添加任务...");
   let unlisten: (() => void) | null = null;
@@ -20,8 +25,20 @@
   let bitDepth = $state("auto");
   let renameTemplate = $state("{original}");
 
-  let progress = $state({ current: 0, total: 0, filename: '', status: '' });
+  let progress = $state({ completed: 0, total: 0, filename: '', status: '' });
   let unlistenProgress: (() => void) | null = null;
+  let unlistenFinished: (() => void) | null = null;
+
+  let showSettings = $state(false);
+  let perfMode = $state('beast');
+  let customConcurrency = $state(0);
+
+  function generateId() { return Date.now().toString(36) + Math.random().toString(36).substr(2); }
+
+  async function saveSetting(key: string, value: any) {
+    await store.set(key, value);
+    await store.save();
+  }
 
   onMount(async () => {
     unlisten = await getCurrentWindow().onDragDropEvent((event) => {
@@ -31,25 +48,38 @@
     });
 
     unlistenProgress = await listen<any>('convert-progress', (event) => {
-      progress = {
-        ...event.payload,
-        current: Math.max(progress.current, event.payload.current)
-      };
+      progress = event.payload;
     });
+
+    unlistenFinished = await listen<any>('conversion-finished', (event) => {
+      sendNotification({
+        title: 'LuminaConvert 转换完成',
+        body: `成功 ${event.payload.success} 张，失败 ${event.payload.failed} 张`
+      });
+    });
+
+    perfMode = (await store.get('perfMode')) || 'beast';
+    customConcurrency = (await store.get('customConcurrency')) || 0;
+    outputDir = (await store.get('outputDir')) || '';
+    renameTemplate = (await store.get('renameTemplate')) || '{original}';
   });
 
   onDestroy(() => {
     if (unlisten) unlisten();
     if (unlistenProgress) unlistenProgress();
+    if (unlistenFinished) unlistenFinished();
   });
 
   async function addPaths(paths: string[]) {
     const imagePaths = paths.filter(path =>
       /\.(jpg|jpeg|png|heic|heif|hif|webp|avif|jxl|tiff|tif|bmp|gif|svg|pdf)$/i.test(path)
     );
-    if (imagePaths.length > 0) {
-      files = [...files, ...imagePaths];
-      statusMessage = `已追加 ${imagePaths.length} 个文件`;
+    const newItems = imagePaths
+      .filter(p => !files.some(f => f.path === p))
+      .map(p => ({ id: generateId(), path: p }));
+    if (newItems.length > 0) {
+      files = [...files, ...newItems];
+      statusMessage = `已追加 ${newItems.length} 个新文件 (已自动去重)`;
     }
   }
 
@@ -67,8 +97,11 @@
       statusMessage = "正在扫描文件夹...";
       try {
         const scannedFiles = await invoke<string[]>('scan_folder', { path: selected });
-        files = [...files, ...scannedFiles];
-        statusMessage = `扫描完成，共发现 ${scannedFiles.length} 张图片`;
+        const newItems = scannedFiles
+          .filter(p => !files.some(f => f.path === p))
+          .map(p => ({ id: generateId(), path: p }));
+        files = [...files, ...newItems];
+        statusMessage = `扫描完成，共发现 ${scannedFiles.length} 张图片 (已去重)`;
       } catch (e) {
         statusMessage = `扫描失败: ${e}`;
       }
@@ -81,26 +114,26 @@
   }
 
   function toggleSelectAll() {
-    if (selectedIndices.size === files.length) {
-      selectedIndices = new Set();
+    if (selectedIds.size === files.length) {
+      selectedIds = new Set();
     } else {
-      selectedIndices = new Set(files.map((_, i) => i));
+      selectedIds = new Set(files.map(f => f.id));
     }
   }
 
-  function toggleSelect(i: number) {
-    if (selectedIndices.has(i)) {
-      const next = new Set(selectedIndices);
-      next.delete(i);
-      selectedIndices = next;
+  function toggleSelect(id: string) {
+    if (selectedIds.has(id)) {
+      const next = new Set(selectedIds);
+      next.delete(id);
+      selectedIds = next;
     } else {
-      selectedIndices = new Set([...selectedIndices, i]);
+      selectedIds = new Set([...selectedIds, id]);
     }
   }
 
   function removeSelected() {
-    files = files.filter((_, i) => !selectedIndices.has(i));
-    selectedIndices = new Set();
+    files = files.filter(f => !selectedIds.has(f.id));
+    selectedIds = new Set();
   }
 
   async function startConversion() {
@@ -111,12 +144,17 @@
     }
 
     isProcessing = true;
-    progress = { current: 0, total: files.length, filename: '', status: '' };
+    progress = { completed: 0, total: files.length, filename: '', status: '' };
     statusMessage = "引擎启动中... (硬件加速已就绪)";
 
     try {
+      await saveSetting('outputDir', outputDir);
+      await saveSetting('renameTemplate', renameTemplate);
+      await saveSetting('perfMode', perfMode);
+      await saveSetting('customConcurrency', customConcurrency);
+
       const result = await invoke<string>('process_images', {
-        paths: files,
+        paths: files.map(f => f.path),
         options: {
           format: targetFormat,
           preset: preset,
@@ -125,13 +163,15 @@
           resize_mode: resizeMode,
           resize_value: resizeValue,
           bit_depth: bitDepth,
-          rename_template: renameTemplate
+          rename_template: renameTemplate,
+          concurrency: customConcurrency,
+          perf_mode: perfMode
         }
       });
       statusMessage = result;
       if (!result.includes('取消')) {
         files = [];
-        selectedIndices = new Set();
+        selectedIds = new Set();
       }
     } catch (e) {
       statusMessage = `发生错误: ${e}`;
@@ -156,12 +196,54 @@
 
 <main class="app-container">
   <header>
-    <h1>LuminaConvert <span class="badge">libvips</span></h1>
+    <h1>LuminaConvert <span class="badge">Safe Core</span></h1>
     <div class="actions">
-      <button class="btn-secondary" onclick={addFiles}>+ 添加文件</button>
-      <button class="btn-secondary" onclick={addFolder}>+ 添加文件夹</button>
+      <button class="btn-secondary" onclick={addFiles}>+ 文件</button>
+      <button class="btn-secondary" onclick={addFolder}>+ 文件夹</button>
+      <button class="btn-icon" onclick={() => showSettings = true} title="高级设置">⚙️</button>
     </div>
   </header>
+
+  {#if showSettings}
+    <div class="modal-overlay" onclick={() => showSettings = false}>
+      <div class="modal-content" onclick={(e) => e.stopPropagation()}>
+        <h2>⚙️ 算力与偏好设置</h2>
+        
+        <div class="setting-group">
+          <label>性能调度模式</label>
+          <div class="segmented-control">
+            <button class:active={perfMode === 'beast'} onclick={() => { perfMode = 'beast'; saveSetting('perfMode', 'beast'); }}>
+              🚀 极速 (满载)
+            </button>
+            <button class:active={perfMode === 'balanced'} onclick={() => { perfMode = 'balanced'; saveSetting('perfMode', 'balanced'); }}>
+              ⚖️ 平衡 (50%)
+            </button>
+            <button class:active={perfMode === 'background'} onclick={() => { perfMode = 'background'; saveSetting('perfMode', 'background'); }}>
+              🐢 后台 (不卡顿)
+            </button>
+          </div>
+          <p class="hint">
+            {#if perfMode === 'beast'}
+              榨干所有 CPU 核心与 libvips 底层线程，适合挂机渲染。
+            {:else if perfMode === 'balanced'}
+              占用一半算力，保证你可以流畅浏览网页或看视频。
+            {:else}
+              强制 libvips 单线程运行，彻底把电脑让给游戏或其他重度软件。
+            {/if}
+          </p>
+        </div>
+
+        <div class="setting-group">
+          <label>自定义并发数 (0 为自动根据模式计算)</label>
+          <input type="number" min="0" max="64" bind:value={customConcurrency} class="num-input" onchange={() => saveSetting('customConcurrency', customConcurrency)} />
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-primary" onclick={() => showSettings = false}>保存并关闭</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <section class="control-panel">
     <div class="control-group full-width">
@@ -246,21 +328,35 @@
   <section class="file-list-container">
     <div class="list-header">
       <label class="checkbox-wrapper">
-        <input type="checkbox" checked={selectedIndices.size === files.length && files.length > 0} onchange={toggleSelectAll} />
+        <input type="checkbox" checked={selectedIds.size === files.length && files.length > 0} onchange={toggleSelectAll} />
         <span>全选 ({files.length})</span>
       </label>
-      <button class="btn-danger" onclick={removeSelected} disabled={selectedIndices.size === 0}>移除选中</button>
+      <button class="btn-danger" onclick={removeSelected} disabled={selectedIds.size === 0}>移除选中</button>
     </div>
 
     <ul class="file-list">
-      {#each files as path, i}
-        <li class:selected={selectedIndices.has(i)}>
+      {#each files.slice(0, 100) as item}
+        <li class:selected={selectedIds.has(item.id)}>
           <label class="checkbox-wrapper">
-            <input type="checkbox" checked={selectedIndices.has(i)} onchange={() => toggleSelect(i)} />
-            <span title={path}>{path.split(/[/\\]/).pop()}</span>
+            <input type="checkbox" checked={selectedIds.has(item.id)} onchange={(e) => {
+              const newSet = new Set(selectedIds);
+              if (e.currentTarget.checked) {
+                newSet.add(item.id);
+              } else {
+                newSet.delete(item.id);
+              }
+              selectedIds = newSet;
+            }} />
+            <span title={item.path}>{item.path.split(/[/\\]/).pop()}</span>
           </label>
         </li>
       {/each}
+      
+      {#if files.length > 100}
+        <li class="more-hint">
+          ... 及其他 {files.length - 100} 个文件 (已在后台安全队列中)
+        </li>
+      {/if}
     </ul>
   </section>
 
@@ -268,13 +364,13 @@
     {#if isProcessing && progress.total > 0}
       <div class="progress-container">
         <div class="progress-info">
-          <span class="progress-text">{progress.current} / {progress.total}</span>
+          <span class="progress-text">{progress.completed} / {progress.total}</span>
           <span class="progress-filename" title={progress.filename}>
             {statusMessage.includes('终止') ? '⏳ 正在终止...' : progress.filename}
           </span>
         </div>
         <div class="progress-bar-bg">
-          <div class="progress-bar-fill" style="width: {(progress.current / progress.total) * 100}%"></div>
+          <div class="progress-bar-fill" style="width: {(progress.completed / progress.total) * 100}%"></div>
         </div>
       </div>
     {/if}
@@ -283,7 +379,7 @@
       {#if isProcessing}
         <button class="btn-danger btn-large" onclick={cancelTask}>⏹ 强制取消</button>
       {:else}
-        <button class="btn-primary" onclick={startConversion} disabled={files.length === 0 || !outputDir}>
+        <button class="btn-primary" onclick={() => startConversion()} disabled={files.length === 0 || !outputDir}>
           开始批量转换
         </button>
         {#if statusMessage.includes('完成') || statusMessage.includes('终止')}
@@ -292,7 +388,7 @@
       {/if}
     </div>
 
-    <div class="status-bar">状态: {statusMessage}</div>
+    <div class="status-bar">状态: {statusMessage} {#if !isProcessing}(files:{files.length}, output:{!!outputDir}){/if}</div>
   </footer>
 </main>
 
@@ -337,6 +433,7 @@
   .file-list li { padding: 8px 15px; border-bottom: 1px solid #222; font-size: 0.85rem; font-family: monospace; transition: background 0.1s; }
   .file-list li.selected { background: #2d3748; }
   .file-list li:hover { background: #252525; }
+  .more-hint { text-align: center; color: #3b82f6; font-weight: 600; background: #1e293b; border: 1px dashed #3b82f6; margin: 10px; border-radius: 6px; padding: 12px; }
   .checkbox-wrapper { display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%; }
   .checkbox-wrapper span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -350,6 +447,17 @@
   .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); transition: width 0.1s linear; box-shadow: 0 0 10px #3b82f6; }
 
   .footer-actions { display: flex; gap: 15px; }
+
+  .btn-icon { background: transparent; border: 1px solid #444; color: #aaa; width: 36px; height: 36px; border-radius: 50%; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+  .btn-icon:hover { background: #333; color: #fff; border-color: #666; }
+
+  .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal-content { background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 24px; width: 450px; max-width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+  .modal-content h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 12px; margin-bottom: 20px; }
+  .setting-group { margin-bottom: 20px; }
+  .setting-group label { display: block; font-size: 0.9rem; color: #ccc; margin-bottom: 8px; font-weight: 600; }
+  .hint { font-size: 0.75rem; color: #888; margin-top: 8px; line-height: 1.4; }
+  .modal-footer { text-align: right; margin-top: 24px; border-top: 1px solid #333; padding-top: 16px; }
 
   button { cursor: pointer; border: none; border-radius: 4px; font-weight: 500; transition: opacity 0.2s; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }

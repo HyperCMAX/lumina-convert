@@ -13,3 +13,4 @@ vite.config.ts.timestamp-*
 /src-tauri/libvips-win/target
 *.exe
 *.msi
+*.dmg

@@ -1,4 +1,8 @@
 fn main() {
+    println!("cargo:rerun-if-changed=vips.h");
+    println!("cargo:rerun-if-env-changed=VIPS_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=VIPS_INCLUDE_DIR");
+
     if let Ok(lib_dir) = std::env::var("VIPS_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
     } else {
@@ -7,7 +11,7 @@ fn main() {
         }
     }
 
-    generate_bindings();
+    generate_bindings_if_needed();
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rustc-link-lib=libvips");
@@ -18,6 +22,25 @@ fn main() {
         println!("cargo:rustc-link-lib=glib-2.0");
         println!("cargo:rustc-link-lib=gobject-2.0");
     }
+}
+
+fn generate_bindings_if_needed() {
+    let bindings_path = std::path::Path::new("src/bindings.rs");
+    if bindings_path.exists() {
+        let vips_modified = std::fs::metadata("vips.h")
+            .and_then(|m| m.modified())
+            .ok();
+        let bindings_modified = std::fs::metadata(bindings_path)
+            .and_then(|m| m.modified())
+            .ok();
+        if let (Some(vips_time), Some(bindings_time)) = (vips_modified, bindings_modified) {
+            if bindings_time > vips_time {
+                eprintln!("libvips-win: bindings.rs is up to date, skipping generation");
+                return;
+            }
+        }
+    }
+    generate_bindings();
 }
 
 fn discover_lib_dirs() -> Vec<String> {
