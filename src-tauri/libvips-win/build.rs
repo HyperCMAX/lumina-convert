@@ -1,11 +1,13 @@
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if let Ok(lib_dir) = std::env::var("VIPS_LIB_DIR") {
+            println!("cargo:rustc-link-search=native={}", lib_dir);
+        }
+        generate_bindings();
+    }
     println!("cargo:rustc-link-lib=vips");
     println!("cargo:rustc-link-lib=glib-2.0");
     println!("cargo:rustc-link-lib=gobject-2.0");
-
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        generate_bindings();
-    }
 }
 
 fn generate_bindings() {

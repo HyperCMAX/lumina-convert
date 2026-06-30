@@ -19,13 +19,21 @@ jobs:
       - name: Install libvips (prebuilt binary)
         shell: pwsh
         run: |
-          $vipsver = "8.16.1"
-          $url = "https://github.com/libvips/libvips/releases/download/v$vipsver/vips-dev-w64-all-$vipsver.zip"
+          $vipsver = "8.18.3"
+          $url = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsver/vips-dev-x64-all-$vipsver.zip"
           $zip = "$env:TEMP\vips.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\vips" -Force
-          echo "VIPS_INCLUDE_DIR=$env:TEMP\vips\vips-dev-$vipsver\include" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "$env:TEMP\vips\vips-dev-$vipsver\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          Write-Host "Downloading $url ..."
+          Invoke-WebRequest -Uri $url -OutFile $zip -Verbose
+          Write-Host "Extracting $zip to $env:TEMP\vips ..."
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\vips" -Force -Verbose
+          $prefix = "$env:TEMP\vips\vips-dev-x64-$vipsver"
+          Write-Host "prefix: $prefix"
+          Write-Host "Contents of $env:TEMP\vips:"
+          Get-ChildItem "$env:TEMP\vips"
+          echo "VIPS_INCLUDE_DIR=$prefix\include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VIPS_LIB_DIR=$prefix\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "$prefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          echo "LIB=$prefix\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build Tauri App
         run: npm run tauri build
