@@ -26,29 +26,42 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # 修复：指定Rust工程在src-tauri目录，解决找不到Cargo.toml
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      # 修复：官方直连地址 + curl稳定下载，去掉代理
+      # 自动定位vips路径，杜绝硬编码目录名错误
       - name: Install libvips official prebuilt binary
         shell: pwsh
         run: |
           $vipsVer = "8.18.2"
           $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
           $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
-          $installDir = "C:\vips"
+          $installRoot = "C:\vips"
 
+          # 下载压缩包
           curl -L -o "$zipFile" "$zipUrl"
-          Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
+          # 解压
+          Expand-Archive -Path $zipFile -DestinationPath $installRoot -Force
 
-          $binPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\bin"
-          echo $binPath | Out-File -FilePath $env:GITHUB_PATH -Append
+          # 自动查找vips.exe所在的bin目录，避免硬编码目录名出错
+          $vipsExe = Get-ChildItem -Path $installRoot -Filter vips.exe -Recurse | Select-Object -First 1
+          if (-not $vipsExe) {
+            Write-Error "vips.exe not found in extracted files"
+            exit 1
+          }
+          $binPath = $vipsExe.DirectoryName
+          Write-Host "Found vips.exe at: $binPath"
 
-          $pkgConfigPath = Join-Path $installDir "vips-dev-x64-all-$vipsVer\lib\pkgconfig"
-          echo "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # 写入PATH，确保后续步骤生效
+          $binPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+          # 自动查找pkgconfig目录
+          $pkgConfig = Get-ChildItem -Path $installRoot -Filter pkgconfig -Recurse -Directory | Select-Object -First 1
+          if ($pkgConfig) {
+            echo "PKG_CONFIG_PATH=$($pkgConfig.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
 
       - name: Verify vips installation
         run: vips --version
