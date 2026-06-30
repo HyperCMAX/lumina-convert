@@ -1,56 +1,65 @@
-name: Build Windows EXE
+name: Build Windows EXE (npm stable version)
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch: # 支持网页手动触发
 
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true # 放行Node20
     steps:
+      # 拉取源码
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 先设置Node，再加放行变量，去掉提前pnpm缓存
-      - name: Setup Node.js 20 LTS
+      # 配置Node 22（稳定官方版本，规避Node20废弃卡死）
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: 'npm'
 
-      # 正常安装pnpm，放在node之后
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      # 使用npm安装依赖，完全绕开pnpm strict-dep-builds拦截问题
+      - name: Install JS dependencies via npm
+        run: npm install
 
-      # 放行esbuild，安装依赖
-      - name: Install JS dependencies
-        run: pnpm install --allow-build=esbuild
-
+      # 构建前端（匹配package.json scripts.build）
       - name: Build frontend
-        run: pnpm run build
+        run: npm run build
 
+      # 初始化Rust编译工具链，Tauri核心编译环境
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # 缓存Rust编译产物，加速重复构建
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      - name: Install libvips via vcpkg
+      # winget官方安装libvips，稳定可靠，避开choco/vcpkg/404二进制下载问题
+      - name: Install libvips via winget
+        shell: pwsh
         run: |
-          choco install vcpkg
-          vcpkg install libvips:x64-windows
+          winget install --id libvips.libvips -e --force
+          $vipsExe = Get-Command vips.exe -ErrorAction SilentlyContinue
+          if ($vipsExe) {
+            Split-Path $vipsExe.Source | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
 
+      # 校验libvips安装成功
+      - name: Verify vips installation
+        run: vips --version
+
+      # 执行Tauri打包编译生成Windows程序
       - name: Build Tauri Windows App
-        run: pnpm tauri build
+        run: npx tauri build
 
+      # 上传编译产物，构建完成可在任务Artifacts下载
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-exe-build
+          name: windows-tauri-exe-package
           path: |
             target/release/*.exe
             target/release/*.msi
             target/release/*.zip
+            target/release/*.nupkg
