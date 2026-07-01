@@ -361,43 +361,61 @@ async fn process_images(paths: Vec<String>, options: ConvertOptions, app: AppHan
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // 🚨 核心截胡：保留目录结构，精准引导 libvips 解码模块
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                let vips_bin = resource_dir.join("vips").join("bin");
-                let vips_lib = resource_dir.join("vips").join("lib");
-
-                if vips_bin.exists() && vips_lib.exists() {
-                    let bin_str = vips_bin.to_string_lossy().to_string();
-                    let lib_str = vips_lib.to_string_lossy().to_string();
-
-                    // 1. 注入 PATH (让系统能找到 libvips-42.dll 和 libheif.dll)
-                    let current_path = std::env::var("PATH").unwrap_or_default();
-                    std::env::set_var("PATH", format!("{};{}", bin_str, current_path));
-
-                    // 2. 🚨 核心：注入 VIPS_MODULE_PATH
-                    //    先尝试精确匹配 vips-modules-<ver>/ 子目录，
-                    //    再回退到 lib/（让 libvips 自动拼接版本号），
-                    //    最后用构建时传入的 VIPS_MODULE_DIR 兜底。
-                    let module_candidates = [
-                        vips_lib.join("vips-modules-8.18"),
-                        vips_lib.join("vips-modules-8.17"),
-                        vips_lib.clone(),
-                    ];
-                    let module_path = module_candidates.iter()
-                        .find(|p| p.exists())
-                        .cloned()
-                        .or_else(|| {
-                            std::env::var("VIPS_MODULE_DIR").ok().map(PathBuf::from)
-                        })
-                        .unwrap_or(vips_lib);
-                    std::env::set_var("VIPS_MODULE_PATH", &module_path.to_string_lossy().to_string());
-                    println!("🚀 VIPS_MODULE_PATH set to: {:?}", module_path);
-
-                    std::env::set_var("VIPS_WARNING", "0");
-                    println!("🚀 libvips 目录结构注入成功: bin={}, lib={}", bin_str, lib_str);
-                } else {
-                    eprintln!("⚠️ 致命错误：未找到 resources/vips/bin 或 lib 目录！请检查打包配置。");
+            fn try_init_vips(vips_bin: &Path, vips_lib: &Path) -> bool {
+                if !vips_bin.exists() || !vips_lib.exists() {
+                    return false;
                 }
+                let bin_str = vips_bin.to_string_lossy().to_string();
+                let lib_str = vips_lib.to_string_lossy().to_string();
+
+                let current_path = std::env::var("PATH").unwrap_or_default();
+                std::env::set_var("PATH", format!("{};{}", bin_str, current_path));
+
+                let module_candidates = [
+                    vips_lib.join("vips-modules-8.18"),
+                    vips_lib.join("vips-modules-8.17"),
+                    vips_lib.to_path_buf(),
+                ];
+                let module_path = module_candidates.iter()
+                    .find(|p| p.exists())
+                    .cloned()
+                    .or_else(|| {
+                        std::env::var("VIPS_MODULE_DIR").ok().map(PathBuf::from)
+                    })
+                    .unwrap_or_else(|| vips_lib.to_path_buf());
+                std::env::set_var("VIPS_MODULE_PATH", &module_path.to_string_lossy().to_string());
+                println!("🚀 VIPS_MODULE_PATH set to: {:?}", module_path);
+
+                std::env::set_var("VIPS_WARNING", "0");
+                println!("🚀 libvips 注入成功: bin={}, lib={}", bin_str, lib_str);
+                true
+            }
+
+            // 尝试多种路径定位 vips（安装模式 + 便携模式）
+            let mut initialized = false;
+
+            // 1. 安装模式：Tauri resource dir
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                initialized = try_init_vips(
+                    &resource_dir.join("vips").join("bin"),
+                    &resource_dir.join("vips").join("lib"),
+                );
+            }
+
+            // 2. 便携模式：EXE 旁边的 vips/ 目录
+            if !initialized {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Some(exe_dir) = exe_path.parent() {
+                        initialized = try_init_vips(
+                            &exe_dir.join("vips").join("bin"),
+                            &exe_dir.join("vips").join("lib"),
+                        );
+                    }
+                }
+            }
+
+            if !initialized {
+                eprintln!("⚠️ 致命错误：未找到 vips/bin 或 vips/lib 目录！请检查打包配置。");
             }
 
             // 🚨 环境变量注入后，再初始化 libvips (此时 PATH 已包含 resources/vips/bin)
