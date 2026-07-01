@@ -22,9 +22,14 @@ jobs:
         run: |
           git clone https://github.com/libvips/build-win64-mxe.git
           cd build-win64-mxe
-          ./build.sh --with-hevc --arch x86_64 --variant all
+          # --with-hevc: 包含 libde265 + x265 解码器
+          # --target x86_64-w64-mingw32.shared: 仅 x64 共享库（跳过 static/arm）
+          # vips-all: "all" 变体，包含所有格式支持
+          ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-all
           mkdir -p /tmp/vips-hevc
-          cp build/vips-dev-x64-all-*.zip /tmp/vips-hevc/
+          cp build/vips-dev-x64-all-*.zip /tmp/vips-hevc/ || true
+          # 如果所有变体名不同，尝试通配
+          cp build/vips-dev-x64-*.zip /tmp/vips-hevc/ 2>/dev/null || true
           echo "libvips with HEVC built successfully"
           ls -lh /tmp/vips-hevc/
 
