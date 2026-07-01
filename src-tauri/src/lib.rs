@@ -371,10 +371,12 @@ pub fn run() {
                 let current_path = std::env::var("PATH").unwrap_or_default();
                 std::env::set_var("PATH", format!("{};{}", bin_str, current_path));
 
+                // ⚠️ build-win64-mxe 把模块放在 bin/vips-modules-<ver>/，
+                //    不是 lib/vips-modules-<ver>/！
                 let module_candidates = [
-                    vips_lib.join("vips-modules-8.18"),
-                    vips_lib.join("vips-modules-8.17"),
-                    vips_lib.to_path_buf(),
+                    vips_bin.join("vips-modules-8.18"),
+                    vips_bin.join("vips-modules-8.17"),
+                    vips_bin.to_path_buf(),
                 ];
                 let module_path = module_candidates.iter()
                     .find(|p| p.exists())
