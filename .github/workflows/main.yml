@@ -5,11 +5,53 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: windows-latest
+  # ============================================================
+  # Job 1（Ubuntu）: 构建 libvips（含 HEVC），缓存到 Ubuntu 本地
+  # ============================================================
+  build-vips:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.cache-vips.outputs.cache-hit }}
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      # Ubuntu 原生 cache（不跨 OS，稳定）
+      - name: Restore cached HEVC libvips
+        id: cache-vips
+        uses: actions/cache@v4
+        with:
+          path: /tmp/vips-extracted/vips-dev-8.18
+          key: libvips-hevc-build-v4-8.18.3
+
+      - name: Build libvips with --with-hevc
+        if: steps.cache-vips.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone https://github.com/libvips/build-win64-mxe.git
+          cd build-win64-mxe
+          ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-web
+          mkdir -p /tmp/vips-extracted
+          ls -lh packaging/*.zip
+          find packaging -name "vips-dev-*.zip" -exec unzip -o {} -d /tmp/vips-extracted/ \;
+          echo "=== Extracted ==="
+          ls -lh /tmp/vips-extracted/
+
+      # 用 artifact 传给 Job 2（Windows），绕过跨 OS cache 的坑
+      - name: Upload vips artifact for Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: vips-hevc-x64
+          path: /tmp/vips-extracted/vips-dev-8.18
+          retention-days: 1
+
+  # ============================================================
+  # Job 2（Windows）: 使用 Job 1 产出的 libvips 构建 EXE
+  # ============================================================
+  build-exe:
+    runs-on: windows-latest
+    needs: build-vips
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -17,7 +59,7 @@ jobs:
           node-version: 22
           cache: 'npm'
 
-      - name: Install JS dependencies via npm
+      - name: Install JS dependencies
         run: npm install
 
       - name: Build frontend
@@ -29,30 +71,12 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
 
-      # 🚨 优先使用 HEVC-enabled 缓存（来自 build-libvips-hevc.yml）
-      #     缓存命中 → 使用 HEVC 版 libvips（含 libde265，可解码 HIF）
-      #     缓存未命中 → 下载官方预编译版（无 HEVC/HIF 支持，只是占位）
-      # 注意：缓存由 build-libvips-hevc.yml（Ubuntu）写入，
-      # main.yml（Windows）读取，所以需要 enableCrossOsArchive: true
-      - name: Restore cached libvips (HEVC or official)
-        id: cache-vips
-        uses: actions/cache@v4
+      # 从 Job 1 下载 HEVC libvips（始终成功，因为 needs: build-vips）
+      - name: Download HEVC libvips from build-vips job
+        uses: actions/download-artifact@v4
         with:
-          path: C:\vips
-          key: libvips-hevc-x64-8.18.3
-          enableCrossOsArchive: true
-
-      - name: "Install libvips (fallback: official prebuilt, no HEVC)"
-        if: steps.cache-vips.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $vipsVer = "8.18.3"
-          $dirVer = "8.18"
-          $zipUrl = "https://github.com/libvips/build-win64-mxe/releases/download/v$vipsVer/vips-dev-x64-all-$vipsVer.zip"
-          $zipFile = Join-Path $env:RUNNER_TEMP vips.zip
-          $installDir = "C:\vips"
-          curl -L -o $zipFile $zipUrl
-          Expand-Archive -Path $zipFile -DestinationPath $installDir -Force
+          name: vips-hevc-x64
+          path: C:\vips\vips-dev-8.18
 
       - name: Set vips environment variables
         shell: pwsh
@@ -68,25 +92,20 @@ jobs:
       - name: Verify vips installation
         run: vips --version
 
-      # 🚨 保留完整目录结构，注入全量 vips
-      - name: Inject Full vips Bundle with Directory Structure
+      - name: Inject Full vips Bundle
         shell: pwsh
         run: |
-          Write-Host "Copying entire vips directory preserving structure..."
           New-Item -ItemType Directory -Force -Path "src-tauri/resources"
           Copy-Item -Path "C:\vips\vips-dev-8.18" -Destination "src-tauri/resources\vips" -Recurse -Force -Verbose
-          Write-Host "vips directory bundled at src-tauri/resources/vips/"
-          Get-ChildItem "src-tauri/resources/vips/lib" -Recurse -Filter "*.dll" | ForEach-Object { Write-Host "  module: $($_.FullName)" }
+          Get-ChildItem "src-tauri/resources/vips/bin" -Recurse -Filter "*.dll" | ForEach-Object { Write-Host "  dll: $($_.Name)" }
 
       - name: Build Tauri Windows App
         run: npx tauri build
 
-      - name: Copy vips directory alongside EXE for portable standalone use
+      - name: Copy vips directory alongside EXE for portable use
         shell: pwsh
         run: |
-          Write-Host "Copying vips directory structure alongside EXE for portable mode..."
           Copy-Item -Path "src-tauri/resources/vips" -Destination "src-tauri/target/release/vips" -Recurse -Force -Verbose
-          Write-Host "vips deployed alongside EXE at src-tauri/target/release/vips/"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
