@@ -17,6 +17,13 @@ fn main() {
         println!("cargo:rustc-link-lib=libvips");
         println!("cargo:rustc-link-lib=libglib-2.0");
         println!("cargo:rustc-link-lib=libgobject-2.0");
+        // ⚡ Delay-load: 让 EXE 启动时不加载这些 DLL，
+        //   等 Rust 代码设好 PATH 后再按需加载。
+        //   这样解压即用（便携模式）也能正常运行。
+        println!("cargo:rustc-link-arg=/DELAYLOAD:libvips-42.dll");
+        println!("cargo:rustc-link-arg=/DELAYLOAD:libglib-2.0-0.dll");
+        println!("cargo:rustc-link-arg=/DELAYLOAD:libgobject-2.0-0.dll");
+        println!("cargo:rustc-link-arg=delayimp.lib");
     } else {
         println!("cargo:rustc-link-lib=vips");
         println!("cargo:rustc-link-lib=glib-2.0");
