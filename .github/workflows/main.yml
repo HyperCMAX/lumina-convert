@@ -30,9 +30,11 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       # 🚨 优先使用 HEVC-enabled 缓存（来自 build-libvips-hevc.yml）
-      - name: Restore cached HEVC libvips
+      # 🚨 注意：首次跑此工作流会缓存官方版（无 HEVC），
+      #        等 build-libvips-hevc.yml 跑完后自动覆盖为 HEVC 版
+      - name: Restore cached libvips (HEVC or official)
         id: cache-vips
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           path: C:\vips
           key: libvips-hevc-x64-8.18.3
