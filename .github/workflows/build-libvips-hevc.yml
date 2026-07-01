@@ -26,8 +26,9 @@ jobs:
           cd build-win64-mxe
           # --with-hevc: 包含 libde265 + x265 解码器
           # --target x86_64-w64-mingw32.shared: 仅 x64 共享库（跳过 static/arm）
-          # vips-all: "all" 变体，包含所有格式支持
-          ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-all
+          # vips-web: 包含 libheif/JPEG/PNG/WebP/TIFF 等常见格式，不含 cfitsio 等罕见依赖
+          # 注意：不要用 vips-all，它依赖 cfitsio（原始站点已下线，镜像 404）
+          ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-web
           # 输出在 packaging/ 子目录下（package-vips.sh 在那里创建 ZIP）
           echo "=== Build output files ==="
           ls -lh packaging/*.zip 2>/dev/null || true
