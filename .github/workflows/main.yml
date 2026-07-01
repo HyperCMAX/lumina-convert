@@ -39,7 +39,7 @@ jobs:
           path: C:\vips
           key: libvips-hevc-x64-8.18.3
 
-      - name: Install libvips (fallback: official prebuilt, no HEVC)
+      - name: "Install libvips (fallback: official prebuilt, no HEVC)"
         if: steps.cache-vips.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
