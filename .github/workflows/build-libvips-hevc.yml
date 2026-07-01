@@ -20,22 +20,23 @@ jobs:
       - name: Build libvips with --with-hevc
         if: steps.cache-vips.outputs.cache-hit != 'true'
         run: |
+          set -e
           git clone https://github.com/libvips/build-win64-mxe.git
           cd build-win64-mxe
           # --with-hevc: 包含 libde265 + x265 解码器
           # --target x86_64-w64-mingw32.shared: 仅 x64 共享库（跳过 static/arm）
           # vips-all: "all" 变体，包含所有格式支持
           ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-all
+          # 输出文件名类似 vips-dev-x64-all-8.18.3-hevc.zip（带 -hevc 后缀）
+          echo "=== Build output files ==="
+          ls -lh *.zip 2>/dev/null || ls -lh build/*.zip 2>/dev/null || true
           mkdir -p /tmp/vips-hevc
-          cp build/vips-dev-x64-all-*.zip /tmp/vips-hevc/ || true
-          # 如果所有变体名不同，尝试通配
-          cp build/vips-dev-x64-*.zip /tmp/vips-hevc/ 2>/dev/null || true
-          echo "libvips with HEVC built successfully"
+          cp *.zip /tmp/vips-hevc/ 2>/dev/null || cp build/*.zip /tmp/vips-hevc/ 2>/dev/null || true
           ls -lh /tmp/vips-hevc/
 
       - name: Upload as Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: vips-hevc-x64
-          path: /tmp/vips-hevc/vips-dev-x64-all-*.zip
+          path: /tmp/vips-hevc/*.zip
           retention-days: 90
