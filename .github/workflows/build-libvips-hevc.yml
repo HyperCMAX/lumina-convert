@@ -1,0 +1,36 @@
+name: Build libvips with HEVC for Windows
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached libvips (HEVC-enabled)
+        id: cache-vips
+        uses: actions/cache@v4
+        with:
+          path: /tmp/vips-hevc
+          key: libvips-hevc-x64-8.18.3
+
+      - name: Build libvips with --with-hevc
+        if: steps.cache-vips.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/libvips/build-win64-mxe.git
+          cd build-win64-mxe
+          ./build.sh --with-hevc --arch x86_64 --variant all
+          mkdir -p /tmp/vips-hevc
+          cp build/vips-dev-x64-all-*.zip /tmp/vips-hevc/
+          echo "libvips with HEVC built successfully"
+          ls -lh /tmp/vips-hevc/
+
+      - name: Upload as Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vips-hevc-x64
+          path: /tmp/vips-hevc/vips-dev-x64-all-*.zip
+          retention-days: 90

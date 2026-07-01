@@ -83,12 +83,19 @@ fn convert_single_image(path: &str, options: &ConvertOptions, counter: usize) ->
             VipsImage::new_from_buffer(&data, "")
                 .map_err(|e2| {
                     let err_str = format!("{:?}", e2).to_lowercase();
-                    if (original_ext == "hif" || original_ext == "heic" || original_ext == "heif")
-                        && (err_str.contains("no loader") || err_str.contains("heif"))
+                    let is_heif = original_ext == "hif" || original_ext == "heic" || original_ext == "heif";
+                    if is_heif && (err_str.contains("no loader") || err_str.contains("heif"))
                     {
-                        "⚠️ Windows 环境缺失 HEVC 解码组件 (H.265 专利壁垒)。请确保打包时已注入 libheif.dll，或在微软商店安装 'HEVC 视频扩展'。".to_string()
+                        "⚠️ Windows 环境缺失 HEVC 解码组件 (H.265 专利壁垒)。\n\
+                         解决方案 (任选其一):\n\
+                         1. 使用 GitHub Actions 运行 build-libvips-hevc.yml 工作流构建带 HEVC 解码的 libvips\n\
+                         2. 在微软商店安装 'HEVC 视频扩展' (付费)\n\
+                         3. 在 Windows 设置中安装 'HEIF 图像扩展' (免费)"
+                        .to_string()
+                    } else if is_heif {
+                        format!("HEIF 解码失败: libheif 可能缺少 libde265 后端。请运行 build-libvips-hevc.yml 工作流构建带 HEVC 的 libvips。原始错误: {:?}", e2)
                     } else {
-                        format!("硬件解码失败(可能为损坏文件): {:?}", e2)
+                        format!("解码失败(可能为损坏文件): {:?}", e2)
                     }
                 })
         })?;
@@ -367,8 +374,24 @@ pub fn run() {
                     let current_path = std::env::var("PATH").unwrap_or_default();
                     std::env::set_var("PATH", format!("{};{}", bin_str, current_path));
 
-                    // 2. 🚨 核心：注入 VIPS_MODULE_PATH (指向 lib/，让 libvips 找到 vips-modules-8.x/vips-heif.dll)
-                    std::env::set_var("VIPS_MODULE_PATH", &lib_str);
+                    // 2. 🚨 核心：注入 VIPS_MODULE_PATH
+                    //    先尝试精确匹配 vips-modules-<ver>/ 子目录，
+                    //    再回退到 lib/（让 libvips 自动拼接版本号），
+                    //    最后用构建时传入的 VIPS_MODULE_DIR 兜底。
+                    let module_candidates = [
+                        vips_lib.join("vips-modules-8.18"),
+                        vips_lib.join("vips-modules-8.17"),
+                        vips_lib.clone(),
+                    ];
+                    let module_path = module_candidates.iter()
+                        .find(|p| p.exists())
+                        .cloned()
+                        .or_else(|| {
+                            std::env::var("VIPS_MODULE_DIR").ok().map(PathBuf::from)
+                        })
+                        .unwrap_or(vips_lib);
+                    std::env::set_var("VIPS_MODULE_PATH", &module_path.to_string_lossy().to_string());
+                    println!("🚀 VIPS_MODULE_PATH set to: {:?}", module_path);
 
                     std::env::set_var("VIPS_WARNING", "0");
                     println!("🚀 libvips 目录结构注入成功: bin={}, lib={}", bin_str, lib_str);
