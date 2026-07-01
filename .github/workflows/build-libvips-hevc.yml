@@ -16,6 +16,7 @@ jobs:
         with:
           path: /tmp/vips-hevc
           key: libvips-hevc-x64-8.18.3
+          enableCrossOsArchive: true
 
       - name: Build libvips with --with-hevc
         if: steps.cache-vips.outputs.cache-hit != 'true'
@@ -27,16 +28,18 @@ jobs:
           # --target x86_64-w64-mingw32.shared: 仅 x64 共享库（跳过 static/arm）
           # vips-all: "all" 变体，包含所有格式支持
           ./build.sh --with-hevc --target x86_64-w64-mingw32.shared vips-all
-          # 输出文件名类似 vips-dev-x64-all-8.18.3-hevc.zip（带 -hevc 后缀）
+          # 输出在 packaging/ 子目录下（package-vips.sh 在那里创建 ZIP）
           echo "=== Build output files ==="
-          ls -lh *.zip 2>/dev/null || ls -lh build/*.zip 2>/dev/null || true
+          ls -lh packaging/*.zip 2>/dev/null || true
+          # 解压 ZIP 以缓存整个目录树（与 Windows 上结构一致）
           mkdir -p /tmp/vips-hevc
-          cp *.zip /tmp/vips-hevc/ 2>/dev/null || cp build/*.zip /tmp/vips-hevc/ 2>/dev/null || true
+          find packaging -name "vips-dev-*.zip" -exec unzip -o {} -d /tmp/vips-hevc/ \;
+          echo "=== Extracted ==="
           ls -lh /tmp/vips-hevc/
 
       - name: Upload as Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: vips-hevc-x64
-          path: /tmp/vips-hevc/*.zip
+          path: /tmp/vips-hevc/vips-dev-*/
           retention-days: 90
